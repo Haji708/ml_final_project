@@ -73,36 +73,50 @@ class DecisionTree:
             return -np.sum(probs*np.log2(probs))
 
 
-    def optimized_bilateral_impurity(self, y):
+    def optimized_bilateral_impurity(self, y_sorted):
         """Gini / entropy (classification) or MSE/variance (regression)."""
         #if self.criterion not in ['mse','gini','entropy']:
-        if len(y)==0:
+        if len(y_sorted)==0:
                 return 0.0
 
         if self.criterion == 'mse':
-            left_sum_y = np.cumsum(y)
-            prefix_sum_y_sqr =np.cumsum(y**2)
+            left_sum_y = np.cumsum(y_sorted)
+            prefix_sum_y_sqr =np.cumsum(y_sorted**2)
 
-            y_sum = np.sum(y)
-            y_sum_sq = np.sum(y** 2)
+            y_sum = np.sum(y_sorted)
+            y_sum_sq = np.sum(y_sorted** 2)
 
             left_sum_y = left_sum_y[:-1]
             right_sum_y = y_sum - left_sum_y
 
-            left_sums_sq = np.cumsum(y** 2)[:-1]
+            left_sums_sq = np.cumsum(y_sorted** 2)[:-1]
             right_sums_sq = y_sum_sq - left_sums_sq
 
-            left_counts = np.arange(1, len(y))
-            right_counts = len(y) - left_counts
+            left_counts = np.arange(1, len(y_sorted))
+            right_counts = len(y_sorted) - left_counts
 
             left_vars = (left_sums_sq / left_counts) - (left_sums / left_counts) ** 2
             right_vars = (right_sums_sq / right_counts) - (right_sums / right_counts) ** 2
             return left_vars, right_vars
         if self.criterion == 'gini':
             
-            classes, counts  = np.unique(y, return_counts=True)
-            probs = counts/len(y)
-            return 1-np.sum(probs**2)
+            classes = np.unique(y_sorted)
+            n_classes = len(classes)
+            n = len(y_sorted)
+            y_onehot = (y_sorted[:, None] == classes).astype(int)
+
+            total_class_counts = np.sum(y_onehot, axis=0)
+
+            left_class_counts = np.cumsum(y_onehot, axis=0)[:-1]
+            right_class_counts = total_class_counts - left_class_counts
+
+            left_counts = np.arange(1, n)[:, None]
+            right_counts = n - left_counts
+
+            gini_left = 1 - np.sum((left_class_counts/left_counts)**2, axis = 1)
+            gini_right = 1 - np.sum((right_class_counts/right_counts)**2, axis = 1)
+
+            return gini_left,gini_right
         if self.criterion == 'entropy':
             classes, counts  = np.unique(y, return_counts=True)
             probs = counts/len(y)

@@ -14,9 +14,8 @@ Suggested design:
     objective used to pick splits,
   - hyperparameters that control overfitting (below).
 """
-
 from __future__ import annotations
-
+import pandas as pd
 import numpy as np
 
 
@@ -54,9 +53,80 @@ class DecisionTree:
         self.root: Node | None = None
 
     # --- impurity -----------------------------------------------------------
+
     def _impurity(self, y) -> float:
         """Gini / entropy (classification) or MSE/variance (regression)."""
+        #if self.criterion not in ['mse','gini','entropy']:
+        if self.criterion == 'mse':
+            return np.var(y)
+        if self.criterion == 'gini':
+            if len(y)==0:
+                return 0.0
+            classes, counts  = np.unique(y, return_counts=True)
+            probs = counts/len(y)
+            return 1-np.sum(probs**2)
+        if self.criterion == 'entropy':
+            if len(y)==0:
+                return 0.0
+            classes, counts  = np.unique(y, return_counts=True)
+            probs = counts/len(y)
+            return -np.sum(probs*np.log2(probs))
+
+
+    def optimized_bilateral_impurity(self, y):
+        """Gini / entropy (classification) or MSE/variance (regression)."""
+        #if self.criterion not in ['mse','gini','entropy']:
+        if len(y)==0:
+                return 0.0
+
+        if self.criterion == 'mse':
+            left_sum_y = np.cumsum(y)
+            prefix_sum_y_sqr =np.cumsum(y**2)
+
+            y_sum = np.sum(y)
+            y_sum_sq = np.sum(y** 2)
+
+            left_sum_y = left_sum_y[:-1]
+            right_sum_y = y_sum - left_sum_y
+
+            left_sums_sq = np.cumsum(y** 2)[:-1]
+            right_sums_sq = y_sum_sq - left_sums_sq
+
+            left_counts = np.arange(1, len(y))
+            right_counts = len(y) - left_counts
+
+            left_vars = (left_sums_sq / left_counts) - (left_sums / left_counts) ** 2
+            right_vars = (right_sums_sq / right_counts) - (right_sums / right_counts) ** 2
+            return left_vars, right_vars
+        if self.criterion == 'gini':
+            
+            classes, counts  = np.unique(y, return_counts=True)
+            probs = counts/len(y)
+            return 1-np.sum(probs**2)
+        if self.criterion == 'entropy':
+            classes, counts  = np.unique(y, return_counts=True)
+            probs = counts/len(y)
+            return -np.sum(probs*np.log2(probs))
+
+            
+
+
         raise NotImplementedError("TODO: impurity")
+
+    def get_optimal_threshold(self,x, y):
+        
+        sorted_indices = np.argsort(x)
+        y_sorted = y[sorted_indices]
+        x_sorted = x[sorted_indices]
+        parent_impurity = self._impurity(y_sorted)
+        n = len(y_sorted)
+        left_impurity,right_impurity = self.optimized_bilateral_impurity(y_sorted)
+        left_counts = np.arange(1, n)
+        right_counts = n - left_counts
+        weighted_child_impurities = (left_counts / n) * left_impurity + (right_counts / n) * right_impurity
+        gains = parent_impurity - weighted_child_impurities
+        best_idx = np.argmax(gains)
+        return (x_sorted[best_idx] + x_sorted[best_idx + 1]) / 2.0
 
     def _best_split(self, X, y):
         """
@@ -64,6 +134,11 @@ class DecisionTree:
         maximizes impurity decrease (feature, threshold, decrease), or
         None if no valid split improves things.
         """
+        
+                
+
+
+
         raise NotImplementedError("TODO: best split search")
 
     # --- grow / predict -----------------------------------------------------

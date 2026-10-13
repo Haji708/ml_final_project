@@ -21,7 +21,7 @@ import numpy as np
 
 class Node:
     """One node of the tree. Fill in the fields you need."""
-    def __init__(self):
+    def __init__(self,feature,threshold,leaf,right,value):
         self.feature = None      # int: feature index to split on (internal)
         self.threshold = None    # float: split threshold (internal)
         self.left = None         # Node
@@ -118,10 +118,24 @@ class DecisionTree:
 
             return gini_left,gini_right
         if self.criterion == 'entropy':
-            classes, counts  = np.unique(y, return_counts=True)
-            probs = counts/len(y)
-            return -np.sum(probs*np.log2(probs))
+            classes = np.unique(y_sorted)
+            n_classes = len(classes)
+            n = len(y_sorted)
+            y_onehot = (y_sorted[:, None] == classes).astype(int)
 
+            total_class_counts = np.sum(y_onehot, axis=0)
+
+            left_counts = np.arange(1, n)[:, None]
+            right_counts = n - left_counts
+
+            left_class_counts = np.cumsum(y_onehot, axis=0)[:-1]
+            right_class_counts = total_class_counts - left_class_counts
+
+    
+
+            entropy_left =  - np.sum((left_class_counts/left_counts) * np.log2(left_class_counts/left_counts+ 1e-9) , axis = 1) # adding a small number to avoid log2(0)
+            entropy_right =  - np.sum((right_class_counts/right_counts) * np.log2(right_class_counts/right_counts+ 1e-9) , axis = 1)
+            return entropy_left,entropy_right
             
 
 
@@ -140,7 +154,9 @@ class DecisionTree:
         weighted_child_impurities = (left_counts / n) * left_impurity + (right_counts / n) * right_impurity
         gains = parent_impurity - weighted_child_impurities
         best_idx = np.argmax(gains)
-        return (x_sorted[best_idx] + x_sorted[best_idx + 1]) / 2.0
+        if gains[best_idx] <= 0:
+            return None, -1.0
+        return [(x_sorted[best_idx] + x_sorted[best_idx + 1]) / 2.0 , gains[best_idx]] # categorical features to be handled later
 
     def _best_split(self, X, y):
         """
@@ -148,8 +164,25 @@ class DecisionTree:
         maximizes impurity decrease (feature, threshold, decrease), or
         None if no valid split improves things.
         """
+        n_features = X.shape[1]
         
-                
+        thresholds = np.zeros(n_features)
+        gains = np.full(n_features, -1.0) 
+
+        for col_idx in range(n_features):
+            thresh, gain = self.get_optimal_threshold(X[:, col_idx], y)
+            if thresh is not None:
+                thresholds[col_idx] = thresh
+                gains[col_idx] = gain
+
+        
+        if np.max(gains) <= 0:
+            return None, None
+
+        best_col = np.argmax(gains)
+        best_threshold = thresholds[best_col]
+
+        return best_col, best_threshold
 
 
 
@@ -158,6 +191,11 @@ class DecisionTree:
     # --- grow / predict -----------------------------------------------------
     def _grow(self, X, y, depth: int) -> Node:
         """Recursively build the tree, respecting the stopping rules."""
+        #if depth>self.max_depth:
+        #    return Node(None,None,None,None,None)
+
+
+
         raise NotImplementedError("TODO: recursive grow")
 
     def fit(self, X, y):

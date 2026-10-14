@@ -21,12 +21,12 @@ import numpy as np
 
 class Node:
     """One node of the tree. Fill in the fields you need."""
-    def __init__(self,feature,threshold,leaf,right,value):
-        self.feature = None      # int: feature index to split on (internal)
-        self.threshold = None    # float: split threshold (internal)
-        self.left = None         # Node
-        self.right = None        # Node
-        self.value = None        # leaf prediction (class label/proba or mean)
+    def __init__(self,feature=None,threshold=None,left=None,right=None,value=None):
+        self.feature = feature      # int: feature index to split on (internal)
+        self.threshold = threshold    # float: split threshold (internal)
+        self.left = left         # Node
+        self.right = right        # Node
+        self.value = value        # leaf prediction (class label/proba or mean)
 
     def is_leaf(self) -> bool:
         return self.left is None and self.right is None
@@ -151,6 +151,12 @@ class DecisionTree:
         left_impurity,right_impurity = self.optimized_bilateral_impurity(y_sorted)
         left_counts = np.arange(1, n)
         right_counts = n - left_counts
+
+        valid_splits = (left_counts >= self.min_samples_leaf) & (right_counts >= self.min_samples_leaf)
+
+        if not np.any(valid_splits):
+            return None, None
+
         weighted_child_impurities = (left_counts / n) * left_impurity + (right_counts / n) * right_impurity
         gains = parent_impurity - weighted_child_impurities
         best_idx = np.argmax(gains)
@@ -188,28 +194,95 @@ class DecisionTree:
 
         raise NotImplementedError("TODO: best split search")
 
+    def compute_leaf_value(self,y):
+        if self.task=='regression':
+            return np.mean(y)
+        else:
+            
+            counts = np.array([np.sum(y == c) for c in self.classes_])
+            probs = counts / len(y)
+            
+            majority_label = self.classes_[counts.argmax()]
+            
+            return probs, majority_label
+
     # --- grow / predict -----------------------------------------------------
-    def _grow(self, X, y, depth: int) -> Node:
+    def _grow(self, X, y,depth: int,valid_indices=None) -> Node:
         """Recursively build the tree, respecting the stopping rules."""
-        #if depth>self.max_depth:
-        #    return Node(None,None,None,None,None)
+        if valid_indices is None:
+            valid_indices = np.arange(len(y))
+        sample_size = len(valid_indices)
 
+        if depth>=self.max_depth or sample_size<self.min_samples_split:
+            return Node(None,None,None,None,self.compute_leaf_value(y[valid_indices])) 
+        best_col, best_threshold = self._best_split(X[valid_indices], y[valid_indices])
 
+        if best_col is None:
+            return Node(None,None,None,None,self.compute_leaf_value(y[valid_indices]))
+
+        feat_vals = X[valid_indices, best_col]
+        left_indices = valid_indices[np.where(feat_vals<=best_threshold)[0]]
+        right_indices = valid_indices[np.where(feat_vals>best_threshold)[0]]
+
+        left_child = self._grow(X,y,depth+1,left_indices)
+        right_child = self._grow(X,y,depth+1,right_indices)
+
+        return Node(best_col,best_threshold,left_child,right_child,None)
 
         raise NotImplementedError("TODO: recursive grow")
 
     def fit(self, X, y):
         X = np.asarray(X, dtype=float)
         y = np.asarray(y)
+        self.classes_ = np.unique(y)
         self.root = self._grow(X, y, depth=0)
         return self
 
     def _predict_one(self, x, node: Node):
+        print(f"Visiting node -> Feature: {node.feature}, Threshold: {node.threshold}, Value: {node.value}, Is Leaf: {node.is_leaf()}")
+        if node.is_leaf():
+            return node.value[1] if self.task=='classification' else node.value
+        if x[node.feature] <= node.threshold:
+            return self._predict_one(x,node.left)
+        return self._predict_one(x,node.right)
+
         raise NotImplementedError("TODO: traverse to a leaf")
 
     def predict(self, X):
+        return np.array([self._predict_one(row,self.root) for row in X])
+
         raise NotImplementedError("TODO: predict")
 
+    def predict_proba_one(self, x,node:Node):
+        """Classification only: return class probabilities from leaf counts."""
+        if node.is_leaf():
+            return node.value[0]
+        if x[node.feature] <= node.threshold:
+            return self.predict_proba_one(x,node.left)
+        return self.predict_proba_one(x,node.right)
+
+        
+        
     def predict_proba(self, X):
         """Classification only: return class probabilities from leaf counts."""
+        return np.array([self.predict_proba_one(row,self.root) for row in X])
         raise NotImplementedError("TODO: predict_proba (classification)")
+
+
+
+"""
+X = np.array([
+    [2.0, 3.0],  
+    [1.0, 1.5], 
+    [8.0, 8.5],  
+    [9.0, 9.5]   
+])
+
+y = np.array([0, 0, 1, 1])
+
+tree = DecisionTree(task='classification',criterion='gini',max_depth=10)
+tree.fit(X,y)
+print(tree.predict(X))
+print('_______________')
+print(tree.predict_proba(X))
+"""

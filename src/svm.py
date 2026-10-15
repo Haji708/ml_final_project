@@ -47,7 +47,13 @@ class PegasosSVM:
     @staticmethod
     def _to_pm1(y):
         """Map {0,1} (or any 2-class labels) to {-1, +1}. Store the mapping."""
-        raise NotImplementedError("TODO: encode labels to +/-1")
+        y = np.array(y)
+        classes = np.unique(y)
+
+        if len(classes) != 2:
+            raise ValueError("y must have exactly 2 unique classes")
+        y_pm1 = np.where(y == classes[0], -1, 1)
+        return y_pm1, classes
 
     def fit(self, X, y):
         """
@@ -55,12 +61,52 @@ class PegasosSVM:
         use eta_t = 1/(lambda*t), and apply the update above.
         Return self.
         """
-        raise NotImplementedError("TODO: Pegasos training loop")
+        X = np.asanyarray(X, dtype=np.float64)
+        y = np.asanyarray(y)
+        y_pm1, self.classes = self._to_pm1(y)
+
+        self.w = np.zeros(X.shape[1])
+        self.b = 0.0
+
+        rng = np.random.default_rng(self.random_state)
+
+        for t in range(1, self.n_iters + 1):
+            # Sample a random index
+            i = rng.integers(X.shape[0])
+            x_i = X[i]
+            y_i = y_pm1[i]
+
+            # Compute the learning rate
+            eta_t = 1 / (self.lambda_ * t)
+
+            # Compute the decision value
+            decision_value = np.dot(self.w, x_i) + self.b
+            margin = y_i * decision_value
+
+            # Update weights and bias based on hinge loss condition
+            if margin < 1:
+                self.w = (1 - eta_t * self.lambda_) * self.w + eta_t * y_i * x_i
+                self.b += eta_t * y_i
+            else:
+                self.w = (1 - eta_t * self.lambda_) * self.w
+        return self
 
     def decision_function(self, X):
         """Return the signed margin  w . x + b  for each row."""
-        raise NotImplementedError("TODO: decision_function")
+        if self.w is None:
+            raise ValueError("Model has not been fitted yet.")
+        X = np.asanyarray(X, dtype=np.float64)
+        if X.shape[1] != self.w.shape[0]:
+            raise ValueError(f"Expected input with {self.w.shape[0]} features, got {X.shape[1]}.")
+        return np.dot(X, self.w) + self.b
 
     def predict(self, X):
         """Return class labels (map sign of decision_function back to your labels)."""
-        raise NotImplementedError("TODO: predict")
+        scores = self.decision_function(X)
+        pm1_predictions = np.where(scores >= 0, 1, -1)
+
+        return np.where(
+            pm1_predictions == 1,
+            self.classes[1],
+            self.classes[0]
+        )

@@ -4,3 +4,4 @@ numpy==1.26.4
 pandas==2.2.2
 matplotlib==3.8.4
 scikit-learn==1.4.2   # baselines / optional bonuses ONLY — not for your models
+pytest==9.1.1

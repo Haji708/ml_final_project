@@ -17,7 +17,7 @@ Suggested design:
 from __future__ import annotations
 import pandas as pd
 import numpy as np
-
+import data_prep
 
 class Node:
     """One node of the tree. Fill in the fields you need."""
@@ -37,7 +37,7 @@ class DecisionTree:
         self,
         task: str = "classification",   # "classification" | "regression"
         criterion: str = "gini",        # "gini" | "entropy" | "mse"
-        max_depth: int | None = None,
+        max_depth: int | None = 10,
         min_samples_split: int = 2,
         min_samples_leaf: int = 1,
         min_impurity_decrease: float = 0.0,
@@ -95,8 +95,8 @@ class DecisionTree:
             left_counts = np.arange(1, len(y_sorted))
             right_counts = len(y_sorted) - left_counts
 
-            left_vars = (left_sums_sq / left_counts) - (left_sums / left_counts) ** 2
-            right_vars = (right_sums_sq / right_counts) - (right_sums / right_counts) ** 2
+            left_vars = (left_sums_sq / left_counts) - (left_sum_y / left_counts) ** 2
+            right_vars = (right_sums_sq / right_counts) - (right_sum_y / right_counts) ** 2
             return left_vars, right_vars
         if self.criterion == 'gini':
             
@@ -141,28 +141,42 @@ class DecisionTree:
 
         raise NotImplementedError("TODO: impurity")
 
-    def get_optimal_threshold(self,x, y):
-        
+    def get_optimal_threshold(self, x, y):
         sorted_indices = np.argsort(x)
-        y_sorted = y[sorted_indices]
         x_sorted = x[sorted_indices]
-        parent_impurity = self._impurity(y_sorted)
+        y_sorted = y[sorted_indices]
         n = len(y_sorted)
-        left_impurity,right_impurity = self.optimized_bilateral_impurity(y_sorted)
+
+        if n < 2:
+            return None, -1.0
+
+        left_impurity, right_impurity = self.optimized_bilateral_impurity(y_sorted)
         left_counts = np.arange(1, n)
         right_counts = n - left_counts
 
-        valid_splits = (left_counts >= self.min_samples_leaf) & (right_counts >= self.min_samples_leaf)
+        valid = (
+            (x_sorted[:-1] < x_sorted[1:])
+            & (left_counts >= self.min_samples_leaf)
+            & (right_counts >= self.min_samples_leaf)
+        )
+        candidate_indices = np.flatnonzero(valid)
 
-        if not np.any(valid_splits):
-            return None, None
-
-        weighted_child_impurities = (left_counts / n) * left_impurity + (right_counts / n) * right_impurity
-        gains = parent_impurity - weighted_child_impurities
-        best_idx = np.argmax(gains)
-        if gains[best_idx] <= 0:
+        if candidate_indices.size == 0:
             return None, -1.0
-        return [(x_sorted[best_idx] + x_sorted[best_idx + 1]) / 2.0 , gains[best_idx]] # categorical features to be handled later
+
+        gains = self._impurity(y_sorted) - (
+            (left_counts[candidate_indices] / n) * left_impurity[candidate_indices]
+            + (right_counts[candidate_indices] / n) * right_impurity[candidate_indices]
+        )
+
+        best_position = int(np.argmax(gains))
+        best_index = candidate_indices[best_position]
+
+        if gains[best_position] <= 0:
+            return None, -1.0
+
+        threshold = (x_sorted[best_index] + x_sorted[best_index + 1]) / 2.0
+        return float(threshold), float(gains[best_position])
 
     def _best_split(self, X, y):
         """
@@ -239,7 +253,7 @@ class DecisionTree:
         return self
 
     def _predict_one(self, x, node: Node):
-        print(f"Visiting node -> Feature: {node.feature}, Threshold: {node.threshold}, Value: {node.value}, Is Leaf: {node.is_leaf()}")
+        #print(f"Visiting node -> Feature: {node.feature}, Threshold: {node.threshold}, Value: {node.value}, Is Leaf: {node.is_leaf()}")
         if node.is_leaf():
             return node.value[1] if self.task=='classification' else node.value
         if x[node.feature] <= node.threshold:
@@ -271,18 +285,19 @@ class DecisionTree:
 
 
 """
-X = np.array([
-    [2.0, 3.0],  
-    [1.0, 1.5], 
-    [8.0, 8.5],  
-    [9.0, 9.5]   
-])
-
-y = np.array([0, 0, 1, 1])
-
-tree = DecisionTree(task='classification',criterion='gini',max_depth=10)
+prepared = data_prep.prepare_data()
+X = prepared["X_train"]
+y = prepared["y_train"]
+X_test =prepared["X_test"]
+y_test =prepared["y_test"]
+tree = DecisionTree(task='regression',criterion='mse',max_depth=10)
 tree.fit(X,y)
-print(tree.predict(X))
+y_pred=tree.predict(X_test)
 print('_______________')
-print(tree.predict_proba(X))
+mae = (sum(abs(y_pred[i]-y_test[i]) for i in range(len(y_pred)))/len(y_test))
+baseline_mae = np.mean(np.abs(y_test - np.median(y)))
+print("Model MAE:", mae)
+print("Median-baseline MAE:", baseline_mae)
+print("Test median price:", np.median(y_test))
+#print(tree.predict_proba(X))
 """

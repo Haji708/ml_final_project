@@ -138,6 +138,89 @@ def plot_error_analysis(
     plt.savefig(save_path, dpi=300)
     plt.close()
 
+def select_svm_config(
+    X_train,
+    y_train,
+    X_validation,
+    y_validation,
+):
+    """Select SVM hyperparameters using validation F1 only."""
+    candidates = [
+        {
+            "feature_map": "linear",
+            "lambda_": 1e-5,
+            "n_components": 500,
+            "gamma": 1.0,
+        },
+        {
+            "feature_map": "linear",
+            "lambda_": 1e-4,
+            "n_components": 500,
+            "gamma": 1.0,
+        },
+        {
+            "feature_map": "linear",
+            "lambda_": 1e-3,
+            "n_components": 500,
+            "gamma": 1.0,
+        },
+        {
+            "feature_map": "rff",
+            "lambda_": 1e-4,
+            "n_components": 250,
+            "gamma": 0.5,
+        },
+        {
+            "feature_map": "rff",
+            "lambda_": 1e-4,
+            "n_components": 500,
+            "gamma": 1.0,
+        },
+        {
+            "feature_map": "rff",
+            "lambda_": 1e-4,
+            "n_components": 500,
+            "gamma": 2.0,
+        },
+    ]
+
+    trials = []
+
+    for config in candidates:
+        model = PegasosSVM(
+            lambda_=config["lambda_"],
+            n_iters=50_000,
+            random_state=42,
+            feature_map=config["feature_map"],
+            n_components=config["n_components"],
+            gamma=config["gamma"],
+        )
+        model.fit(X_train, y_train)
+
+        predictions = model.predict(X_validation)
+        scores = model.decision_function(X_validation)
+
+        precision, recall, f1 = evaluate.precision_recall_f1(
+            y_validation,
+            predictions,
+        )
+        auc = evaluate.roc_auc(y_validation, scores)
+
+        trials.append({
+            **config,
+            "Precision": precision,
+            "Recall": recall,
+            "F1": f1,
+            "AUC": auc,
+        })
+
+    trials_df = pd.DataFrame(trials)
+    best_config = trials_df.sort_values(
+        ["F1", "AUC"],
+        ascending=False,
+    ).iloc[0].to_dict()
+
+    return best_config, trials_df
 
 def main() -> None:
     print("=" * 80)
@@ -275,10 +358,46 @@ def main() -> None:
     # -------------------------------------------------------------------------
     print("\n[Step 3/4] Training and evaluating Task B classification models...")
 
-    # Model B1: From-Scratch Pegasos Soft-Margin SVM
-    print("  -> Training From-Scratch Pegasos SVM (lambda=1e-4, 50k iters)...")
+    print("  -> Selecting SVM configuration on validation data...")
+
+    best_svm_config, svm_trials = select_svm_config(
+        X_train_sc,
+        y_tier_tr,
+        X_val_sc,
+        y_tier_val,
+    )
+
+    svm_trials.to_csv(
+        REPORT_DIR / "svm_validation_trials.csv",
+        index=False,
+    )
+
+    print(
+        "     Selected:",
+        {
+            key: best_svm_config[key]
+            for key in (
+                "feature_map",
+                "lambda_",
+                "gamma",
+                "n_components",
+            )
+        },
+        f"with validation F1={best_svm_config['F1']:.4f}",
+    )
+
+    # Model B1: validation-selected From-Scratch Pegasos Soft-Margin SVM
+    print("  -> Training validation-selected From-Scratch Pegasos SVM...")
     t_start = time.time()
-    pegasos_svm = PegasosSVM(lambda_=1e-4, n_iters=50_000, random_state=42)
+    pegasos_svm = PegasosSVM(
+        lambda_=float(best_svm_config["lambda_"]),
+        n_iters=50_000,
+        random_state=42,
+        feature_map=str(best_svm_config["feature_map"]),
+        n_components=int(best_svm_config["n_components"]),
+        gamma=float(best_svm_config["gamma"]),
+        record_every=100,
+    )
     pegasos_svm.fit(X_train_sc, y_tier_tr)
     t_fit_svm = time.time() - t_start
 
@@ -295,6 +414,63 @@ def main() -> None:
     auc_t = evaluate.roc_auc(y_tier_test, scores_test_svm)
     test_results["PegasosSVM (Scratch)"] = {"Precision": p_t, "Recall": r_t, "F1": f1_t, "AUC": auc_t}
     print(f"     Val F1: {f1_v:.4f}, AUC: {auc_v:.4f} (fit: {t_fit_svm:.2f}s)")
+
+    # Model B1b: From-Scratch Pegasos SVM with Random Fourier Features
+    print("  -> Training From-Scratch Pegasos SVM with RFF...")
+    t_start = time.time()
+
+    pegasos_rff = PegasosSVM(
+        lambda_=1e-4,
+        n_iters=50_000,
+        random_state=42,
+        feature_map="rff",
+        n_components=500,
+        gamma=1.0,
+        record_every=100,
+    )
+    pegasos_rff.fit(X_train_sc, y_tier_tr)
+
+    t_fit_rff = time.time() - t_start
+
+    t_predict = time.time()
+    preds_val_rff = pegasos_rff.predict(X_val_sc)
+    scores_val_rff = pegasos_rff.decision_function(X_val_sc)
+    preds_test_rff = pegasos_rff.predict(X_test_sc)
+    scores_test_rff = pegasos_rff.decision_function(X_test_sc)
+    t_predict_rff = time.time() - t_predict
+
+    p_v, r_v, f1_v = evaluate.precision_recall_f1(
+        y_tier_val,
+        preds_val_rff,
+    )
+    auc_v = evaluate.roc_auc(y_tier_val, scores_val_rff)
+
+    val_results["PegasosSVM (RFF)"] = {
+        "Precision": p_v,
+        "Recall": r_v,
+        "F1": f1_v,
+        "AUC": auc_v,
+    }
+
+    p_t, r_t, f1_t = evaluate.precision_recall_f1(
+        y_tier_test,
+        preds_test_rff,
+    )
+    auc_t = evaluate.roc_auc(y_tier_test, scores_test_rff)
+
+    test_results["PegasosSVM (RFF)"] = {
+        "Precision": p_t,
+        "Recall": r_t,
+        "F1": f1_t,
+        "AUC": auc_t,
+    }
+
+    print(
+        f"     Val F1: {f1_v:.4f}, "
+        f"AUC: {auc_v:.4f}, "
+        f"fit: {t_fit_rff:.2f}s, "
+        f"predict: {t_predict_rff:.2f}s"
+    )
 
     # Model B2: Scikit-learn SGDClassifier (hinge loss baseline)
     print("  -> Training scikit-learn SGDClassifier (hinge loss baseline)...")
@@ -364,7 +540,14 @@ def main() -> None:
     # -------------------------------------------------------------------------
     print("\n[Step 4/4] Generating error analysis figures and comparison reports...")
 
-    plot_svm_weights(feat_names, pegasos_svm.w, FIG_DIR / "svm_feature_weights.png")
+    if pegasos_svm.feature_map == "linear":
+        plot_svm_weights(
+            feat_names,
+            pegasos_svm.w,
+            FIG_DIR / "svm_feature_weights.png",
+        )
+    else:
+        print("  - Skipped original-feature weight plot for RFF model")
     plot_tree_feature_importances(feat_names, dt_clf.feature_importances_, FIG_DIR / "tree_feature_importances.png")
     plot_error_analysis(
         y_val,
@@ -377,6 +560,52 @@ def main() -> None:
     print("     - svm_feature_weights.png")
     print("     - tree_feature_importances.png")
     print("     - error_analysis.png")
+
+    svm_diagnostics = pd.DataFrame([
+        {
+            "model": f"PegasosSVM ({pegasos_svm.feature_map})",
+            "feature_map": pegasos_svm.feature_map,
+            "lambda": pegasos_svm.lambda_,
+            "n_iters": pegasos_svm.n_iters,
+            "gamma": pegasos_svm.gamma,
+            "n_components": pegasos_svm.n_components,
+            "weight_norm": np.linalg.norm(pegasos_svm.w),
+            "margin_width": pegasos_svm.margin_width_,
+            "support_vector_count": len(pegasos_svm.support_indices_),
+            "final_objective": pegasos_svm.objective_history_[-1],
+            "fit_seconds": t_fit_svm,
+        },
+        {
+            "model": "PegasosSVM (RFF)",
+            "feature_map": "rff",
+            "lambda": pegasos_rff.lambda_,
+            "n_iters": pegasos_rff.n_iters,
+            "gamma": pegasos_rff.gamma,
+            "n_components": pegasos_rff.n_components,
+            "weight_norm": np.linalg.norm(pegasos_rff.w),
+            "margin_width": pegasos_rff.margin_width_,
+            "support_vector_count": len(pegasos_rff.support_indices_),
+            "final_objective": pegasos_rff.objective_history_[-1],
+            "fit_seconds": t_fit_rff,
+        },
+    ])
+
+    svm_diagnostics.to_csv(
+        REPORT_DIR / "svm_diagnostics.csv",
+        index=False,
+    )
+
+    convergence = pd.DataFrame({
+        "linear_iteration": pegasos_svm.objective_iterations_,
+        "linear_objective": pegasos_svm.objective_history_,
+        "rff_iteration": pegasos_rff.objective_iterations_,
+        "rff_objective": pegasos_rff.objective_history_,
+    })
+
+    convergence.to_csv(
+        REPORT_DIR / "svm_convergence.csv",
+        index=False,
+    )
 
     print("\n" + "=" * 80)
     print("  VALIDATION SET BENCHMARK RESULTS")
@@ -393,7 +622,13 @@ def main() -> None:
     df_test = pd.DataFrame(test_results).T
     df_val.to_csv(REPORT_DIR / "validation_summary.csv")
     df_test.to_csv(REPORT_DIR / "test_summary.csv")
-    print(f"  ✓ Exported results to {REPORT_DIR / 'validation_summary.csv'} and {REPORT_DIR / 'test_summary.csv'}")
+    print(
+        f"  ✓ Exported results to {REPORT_DIR / 'validation_summary.csv'}, "
+        f"{REPORT_DIR / 'test_summary.csv'}, "
+        f"{REPORT_DIR / 'svm_validation_trials.csv'}, "
+        f"{REPORT_DIR / 'svm_diagnostics.csv'}, and "
+        f"{REPORT_DIR / 'svm_convergence.csv'}"
+    )
     print("\n✓ Pipeline execution complete.")
 
 

@@ -41,7 +41,7 @@
     "updates_per_training_row": 7.092902841416878,
     "initial_objective": 30474.969617973966,
     "final_objective": 0.42848626358877473,
-    "fit_and_validation_seconds": 2.463901907998661
+    "fit_and_validation_seconds": 2.513002477993723
   },
   "svm_rff": {
     "feature_map": "rff",
@@ -57,7 +57,7 @@
     "updates_per_training_row": 2.8371611365667513,
     "initial_objective": 14190.025071444023,
     "final_objective": 0.48813400742136603,
-    "fit_and_validation_seconds": 1.9821993150035269
+    "fit_and_validation_seconds": 1.985491017003369
   },
   "scratch_tree_regression": {
     "task": "regression",

@@ -1,0 +1,335 @@
+\documentclass[aspectratio=169,10pt]{beamer}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{array}
+
+\definecolor{ink}{HTML}{1F2933}
+\definecolor{teal}{HTML}{147D73}
+\definecolor{coral}{HTML}{D45B45}
+\definecolor{gold}{HTML}{C58B25}
+\definecolor{mist}{HTML}{EEF3F1}
+
+\usetheme{default}
+\setbeamercolor{normal text}{fg=ink,bg=white}
+\setbeamercolor{structure}{fg=teal}
+\setbeamercolor{frametitle}{fg=ink,bg=mist}
+\setbeamercolor{title}{fg=ink}
+\setbeamercolor{block title}{fg=white,bg=teal}
+\setbeamercolor{block body}{fg=ink,bg=mist}
+\setbeamercolor{alerted text}{fg=coral}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{itemize item}{\color{teal}$\blacktriangleright$}
+\setbeamertemplate{itemize subitem}{\color{gold}$\bullet$}
+\setbeamertemplate{footline}{%
+  \hfill\color{ink!55}\insertshorttitle\hspace{1em}%
+  \insertframenumber\,/\,\inserttotalframenumber\hspace{1.2em}\vspace{0.7em}%
+}
+\setbeamertemplate{frametitle}{%
+  \vspace{0.45em}\insertframetitle\par\vspace{0.25em}%
+}
+\graphicspath{{../report/figures/}{report/figures/}}
+
+\title[Real-estate ML]{Real-Estate Price Prediction}
+\subtitle{From-scratch decision trees and Pegasos SVMs on bina.az listings}
+\author{MLE-AI-201 Final Project}
+\institute{AI Academy --- Cohort II}
+\date{18 October 2026}
+
+\begin{document}
+
+\begin{frame}[plain]
+  \vspace{1.3cm}
+  {\color{teal}\rule{0.12\linewidth}{3pt}}\par\vspace{0.45cm}
+  {\LARGE\bfseries Real-Estate Price Prediction\par}
+  \vspace{0.3cm}
+  {\large From-scratch decision trees and Pegasos SVMs\par}
+  \vspace{0.15cm}
+  {\large on bina.az listings\par}
+  \vspace{0.9cm}
+  {\normalsize MLE-AI-201 Final Project\par}
+  {\small AI Academy --- Cohort II\hfill 18 October 2026\par}
+  \vfill
+  \begin{beamercolorbox}[wd=\linewidth,sep=0.8em,rounded=true]{block body}
+    Two tasks, one reproducible pipeline: estimate listing price and classify
+    listings as standard or premium.
+  \end{beamercolorbox}
+\end{frame}
+
+\begin{frame}{Problem and dataset}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.53\textwidth}
+      \begin{block}{Task A --- regression}
+        Predict listing price in AZN from property, location, and listing
+        features. Report RMSE, MAE, and $R^2$.
+      \end{block}
+      \begin{block}{Task B --- classification}
+        Predict a binary price tier: premium when price exceeds the training
+        median; standard otherwise. Report precision, recall, F1, and ROC-AUC.
+      \end{block}
+    \column{0.43\textwidth}
+      \large\bfseries Dataset snapshot\par\vspace{0.25cm}
+      \begin{tabular}{@{}lr@{}}
+        Raw listings & 100,775\\
+        Clean listings & 100,705\\
+        Encoded features & 178\\
+        Train / validation / test & 70 / 15 / 15\%\\
+        Tier threshold & 218,000 AZN\\
+      \end{tabular}
+      \vspace{0.4cm}\par
+      \small Seeded, proportional sampling within price-rank strata; the
+      tier cutoff is computed from training data only.
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Data preparation and leakage controls}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.49\textwidth}
+      \textbf{Cleaning and feature work}
+      \begin{itemize}
+        \item Enforce AZN currency; remove missing/non-positive prices and
+          apply fixed eligibility ranges.
+        \item Parse building and land area; convert land units and split floor
+          into current and total floors.
+        \item Impute numeric missing values from training data; encode
+          categorical features with training-fitted preprocessing.
+        \item Keep location coordinates, rooms, area, listing flags, and
+          selected categorical fields.
+      \end{itemize}
+    \column{0.47\textwidth}
+      \begin{beamercolorbox}[wd=\linewidth,sep=0.8em,rounded=true]{block body}
+        \textbf{Leakage prevention}\par\vspace{0.15cm}
+        \texttt{unit\_price} and \texttt{total\_price} are excluded because
+        they reveal the target. Identifiers, URLs, owner names, addresses, and
+        free text are outside the selected feature set.\par\vspace{0.3cm}
+        Split first; fit imputers, encoders, and scalers on training data only.
+        Validation selects settings; test data is held for final evaluation.
+      \end{beamercolorbox}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{From-scratch decision trees}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.50\textwidth}
+      \begin{itemize}
+        \item Numeric threshold splits chosen by weighted impurity reduction.
+        \item Gini and entropy for classification; variance/MSE for regression.
+        \item Stopping controls include maximum depth, minimum split/leaf
+          counts, and minimum impurity decrease.
+        \item Select tree settings using validation performance only( limited tuning  due to O(candidates^p ) complexity).
+        \item         Fitting data takes    O(depth*features*rows*log(rows)) time.
+      \end{itemize}
+      \vspace{0.2cm}
+      \small Selected scratch settings: regression, MSE, depth 15, leaf 1;
+      classification, entropy, depth 15, leaf 1.
+    \column{0.48\textwidth}
+      \centering
+      \includegraphics[width=\linewidth,height=0.48\textheight,keepaspectratio]{tree_validation_curves.png}
+      \vspace{0.1cm}\par
+      {\scriptsize Validation curves show the depth/leaf trade-off used in
+      model selection.}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Pegasos SVM and nonlinear features}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.55\textwidth}
+      The scratch SVM minimizes the regularized hinge-loss objective:
+      \[
+        J(\mathbf{w},b)=\frac{\lambda}{2}\|\mathbf{w}\|^2+
+        \frac{1}{n}\sum_{i=1}^{n}\max\!\left(0,
+        1-y_i(\mathbf{w}^{\mathsf T}\mathbf{x}_i+b)\right).
+      \]
+      \begin{itemize}
+        \item Pegasos stochastic sub-gradient updates use
+          $\eta_t=1/(\lambda t)$.
+        \item Standardization is fit on training data; objective and margin
+          diagnostics are available during fitting.
+        \item Random Fourier Features map inputs to an approximate RBF space.
+      \end{itemize}
+    \column{0.41\textwidth}
+      \begin{beamercolorbox}[wd=\linewidth,sep=0.8em,rounded=true]{block body}
+        \textbf{Selected by validation}\par\vspace{0.2cm}
+        Linear Pegasos\\
+        $\lambda=0.001$, 500,000 updates\\[0.2cm]
+        RFF Pegasos\\
+        $\gamma=0.001$, 500 features, 200,000 updates
+      \end{beamercolorbox}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Evaluation protocol}
+  \begin{itemize}
+    \item Fixed seed: 42. Train on 70,493 listings; validate on 15,106;
+      evaluate once on 15,106 held-out test listings.
+    \item Regression: scratch Linear/Ridge, scratch tree, sklearn Linear/Ridge,
+      sklearn tree, and training-median reference.
+    \item Classification: scratch tree and Pegasos (linear/RFF), plus sklearn
+      SGD hinge, LinearSVC, and decision-tree baselines.
+    \item Configuration selection uses training and validation data only;
+      validation metrics and final held-out test metrics are shown separately.
+  \end{itemize}
+  \vspace{0.25cm}
+  \begin{beamercolorbox}[wd=\linewidth,sep=0.65em,rounded=true]{block body}
+    Validation results support model selection; test results provide the final
+    held-out evaluation. Regression errors are in AZN.
+  \end{beamercolorbox}
+\end{frame}
+
+\begin{frame}{Validation results --- regression}
+  \centering
+  \begin{tabular}{@{}lrrr@{}}
+    \toprule
+    Model & RMSE (AZN) & MAE (AZN) & $R^2$\\
+    \midrule
+    Linear (scratch) & 469,459 & 138,452 & 0.489\\
+    Linear (sklearn) & 469,459 & 138,452 & 0.489\\
+    Ridge (scratch) & 469,459 & 138,452 & 0.489\\
+    Ridge (sklearn) & 469,459 & 138,452 & 0.489\\
+    Decision tree (sklearn) & \textbf{359,068} & 86,810 & \textbf{0.701}\\
+    Decision tree (scratch) & 360,381 & \textbf{71,074} & 0.699\\
+    Training-median reference & 666,155 & 191,467 & -0.030\\
+    \bottomrule
+  \end{tabular}
+  \vspace{0.45cm}\par
+  \begin{beamercolorbox}[wd=0.86\linewidth,sep=0.65em,rounded=true]{block body}
+    The sklearn tree has the best validation RMSE and $R^2$; the scratch tree
+    has the lowest validation MAE. Linear and Ridge remain nearly identical.
+  \end{beamercolorbox}
+\end{frame}
+
+\begin{frame}{Validation results --- price tier}
+  \centering
+  \begin{tabular}{@{}lrr@{}}
+    \toprule
+    Model & F1 & ROC-AUC\\
+    \midrule
+    Pegasos (scratch, linear) & 0.827 & 0.907\\
+    Pegasos (scratch, RFF) & 0.828 & 0.906\\
+    SGDClassifier (hinge) & 0.836 & 0.910\\
+    LinearSVC & 0.832 & 0.918\\
+    Decision tree (scratch) & \textbf{0.942} & 0.962\\
+    Decision tree (sklearn) & 0.928 & \textbf{0.967}\\
+    \bottomrule
+  \end{tabular}
+  \vspace{0.45cm}\par
+  \begin{beamercolorbox}[wd=0.86\linewidth,sep=0.65em,rounded=true]{block body}
+    The scratch tree has the best validation F1, while sklearn's tree has the
+    best ROC-AUC. These validation scores are not the final test estimates.
+  \end{beamercolorbox}
+\end{frame}
+
+\begin{frame}{Test results --- regression}
+  \centering
+  \begin{tabular}{@{}lrrr@{}}
+    \toprule
+    Model & RMSE (AZN) & MAE (AZN) & $R^2$\\
+    \midrule
+    Linear (scratch) & 505,494 & 139,441 & 0.450\\
+    Linear (sklearn) & 505,494 & 139,441 & 0.450\\
+    Ridge (scratch) & 505,495 & 139,441 & 0.450\\
+    Ridge (sklearn) & 505,495 & 139,441 & 0.450\\
+    Decision tree (sklearn) & 401,341 & 88,675 & 0.653\\
+    Decision tree (scratch) & \textbf{380,596} & \textbf{71,856} & \textbf{0.688}\\
+    Training-median reference & 691,594 & 196,612 & -0.030\\
+    \bottomrule
+  \end{tabular}
+  \vspace{0.45cm}\par
+  \begin{beamercolorbox}[wd=0.86\linewidth,sep=0.65em,rounded=true]{block body}
+    The scratch tree has the lowest test RMSE and MAE among the reported
+    regression models. Linear and Ridge agree closely with their sklearn
+    counterparts.
+  \end{beamercolorbox}
+\end{frame}
+
+\begin{frame}{Test results --- price tier}
+  \centering
+  \begin{tabular}{@{}lrr@{}}
+    \toprule
+    Model & F1 & ROC-AUC\\
+    \midrule
+    Pegasos (scratch, linear) & 0.826 & 0.911\\
+    Pegasos (scratch, RFF) & 0.832 & 0.908\\
+    SGDClassifier (hinge) & 0.838 & 0.910\\
+    LinearSVC & 0.835 & 0.920\\
+    Decision tree (scratch) & 0.941 & 0.962\\
+    Decision tree (sklearn) & \textbf{0.930} & \textbf{0.967}\\
+    \bottomrule
+  \end{tabular}
+  \vspace{0.45cm}\par
+  \begin{beamercolorbox}[wd=0.86\linewidth,sep=0.65em,rounded=true]{block body}
+    The scratch tree leads the listed classifiers in test F1; sklearn's tree
+    has the highest ROC-AUC. Pegasos and linear baselines are competitive but
+    trail the trees on this split.
+  \end{beamercolorbox}
+\end{frame}
+
+\begin{frame}{Error patterns and model selection}
+  \centering
+  \includegraphics[width=0.95\linewidth,height=0.66\textheight,keepaspectratio]{error_analysis.png}
+  \vspace{0.1cm}\par
+  {\small Price errors are asymmetric with several large residuals; tier
+  classification is substantially stronger than a trivial baseline, but still
+  misclassifies both classes.}
+\end{frame}
+
+\begin{frame}{Four-member responsibility split}
+  \small
+  \begin{columns}[T,onlytextwidth]
+    \column{0.49\textwidth}
+      \textbf{Mahhamadali Babayev--- Data and Task A}
+      \begin{itemize}
+        \item Cleaning, preprocessing, feature engineering, and leakage controls.
+        \item Scratch Linear/Ridge via normal equations; sklearn regression
+          models and Task A evaluation.
+      \end{itemize}
+      \textbf{Ilham Hajiyev --- Decision trees}
+      \begin{itemize}
+        \item Scratch Gini/entropy/MSE tree, threshold search, and stopping rules.
+        \item Tree unit tests; Tree HP tuning.
+      \end{itemize}
+    \column{0.49\textwidth}
+      \textbf{Mahammad Cavadzade --- SVM}
+      \begin{itemize}
+        \item Scratch Pegasos, objective/margin/support-vector diagnostics.
+        \item Nonlinear RFF or kernel extension and feature scaling.
+      \end{itemize}
+      \textbf{Fariz Isgandarli --- EDA and integration}
+      \begin{itemize}
+        \item EDA and optional geospatial clustering/PCA.
+        \item sklearn classification baselines, metrics, feature importance,
+          error analysis, runner, and repository setup.
+      \end{itemize}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Limitations and next steps}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.49\textwidth}
+      \textbf{Limitations}
+      \begin{itemize}
+        \item One geographic marketplace and one fixed data snapshot.
+        \item A median split discards price magnitude and depends on the
+          training sample.
+        \item Large price residuals remain; aggregate metrics hide local and
+          category-specific error differences.
+        \item Single held-out split; reported values are not fold-averaged
+        \item         Limited Tuning due to time and reproducibility concerns.
+      \end{itemize}
+    \column{0.49\textwidth}
+      \textbf{Next steps}
+      \begin{itemize}
+        \item Validate across time or repeated splits.
+        \item Analyze errors by region, property type, and price range.
+        \item Compare calibrated thresholds and probability quality.
+        \item Document data provenance and monitor for marketplace drift.
+      \end{itemize}
+  \end{columns}
+  \vfill
+  \centering\large\color{teal}\bfseries Questions?
+\end{frame}
+
+\end{document}

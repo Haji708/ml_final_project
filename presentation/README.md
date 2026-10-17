@@ -3,6 +3,7 @@
 Put your final **slides PDF** here (e.g. `slides.pdf`) and submit the same
 PDF on Moodle.
 
+
 Suggested flow (~8–10 slides, defended live after the deadline):
 1. Problem & dataset (bina.az: price regression + derived price tier).
 2. Cleaning & features; the leakage columns you removed.

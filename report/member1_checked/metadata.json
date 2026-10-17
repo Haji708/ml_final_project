@@ -227,18 +227,18 @@
     "Linear": {
       "family": "Linear",
       "alpha": 0.0,
-      "feature_mode": "log_size",
+      "feature_mode": "log_size_interactions",
       "target_mode": "price",
-      "validation_RMSE": 489689.08455217024,
-      "training_RMSE": 455725.8411332075
+      "validation_RMSE": 469459.25926248514,
+      "training_RMSE": 435877.9671766525
     },
     "Ridge": {
       "family": "Ridge",
       "alpha": 0.01,
-      "feature_mode": "log_size",
+      "feature_mode": "log_size_interactions",
       "target_mode": "price",
-      "validation_RMSE": 489689.11193460255,
-      "training_RMSE": 455725.85999348765
+      "validation_RMSE": 469459.45476083556,
+      "training_RMSE": 435878.07111084525
     },
     "Tree": {
       "family": "Tree",
@@ -250,9 +250,26 @@
       "training_RMSE": 231242.99449549316
     }
   },
+  "search_feature_modes": [
+    "raw",
+    "log_size",
+    "raw_interactions",
+    "log_size_interactions"
+  ],
+  "search_ridge_alphas": [
+    0.01,
+    0.1,
+    1.0,
+    10.0,
+    100.0,
+    1000.0,
+    10000.0
+  ],
+  "selection_metric": "validation RMSE in AZN after inverse target transformation",
+  "diagnostic_split": "validation only; top 50 absolute errors per custom model and tree baseline",
   "custom_sklearn_max_difference_AZN": {
-    "Linear": 2.0081643015146255e-08,
-    "Ridge": 8.335337042808533e-08
+    "Linear": 2.5029294192790985e-08,
+    "Ridge": 0.0016624962445348501
   },
   "cv_folds": 5,
   "cv_note": "Training-only fixed-config descriptive CV; not nested CV and not test-set confidence intervals.",
@@ -268,6 +285,6 @@
     "data_prep.py": "03566e114584981d12db62032b7ff54e76d5efe7863969017f4f0bd6bc6f0ea7",
     "linear_regression.py": "fc7d93e62ef5438fb79f962df927dd895a8a86622c24d08db069e6bb58e9a6e4",
     "member1_metrics.py": "ab34a5894d8993690d349955da68ada5d218607e41c4cf30d8e29e80e4590708",
-    "member1_regression.py": "58db820c091f1b527a5aad6b03a3a731bcd7993f1d2a298c0bcedcf140d76b34"
+    "member1_regression.py": "00cf72223f0c85388bd1548f33e713c568b7084da457bf4caaaf6237661a289d"
   }
 }

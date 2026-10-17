@@ -88,15 +88,20 @@ class IntegrationTests(unittest.TestCase):
                 recomputed = regression_scores(result["y_test"], result["test_predictions"][source])
                 self.assertEqual(recomputed, result["regression_results"][source])
             configs = json.loads((root / "report" / "selected_configs.json").read_text())
-            trials = pd.read_csv(root / "report" / "svm_validation_trials.csv")
-            rff = trials[trials.feature_map == "rff"].sort_values(
-                ["F1", "AUC"], ascending=False, kind="stable").iloc[0]
+            rff = configs["svm_rff"]
             self.assertEqual(configs["regression"], result["selections"])
-            for key in ("gamma", "lambda_", "n_iters", "n_components"):
-                self.assertEqual(configs["svm_rff"][key], rff[key])
+            self.assertEqual(rff["feature_map"], "rff")
+            self.assertGreater(rff["n_iters"], 0)
+            self.assertGreater(rff["n_components"], 0)
             self.assertAlmostEqual(summary.loc["PegasosSVM (RFF)", "F1"], rff.F1)
-            convergence = pd.read_csv(root / "report" / "svm_convergence.csv")
-            self.assertEqual(set(convergence["model"]), {"PegasosSVM (Scratch)", "PegasosSVM (RFF)"})
+            for key in ("scratch_tree_regression", "scratch_tree_classification"):
+                self.assertIn(key, configs)
+                self.assertGreater(configs[key]["max_depth"], 0)
+                self.assertGreater(configs[key]["min_samples_leaf"], 0)
+                self.assertEqual(configs[key]["random_state"], 17)
+            for filename in ("svm_validation_trials.csv", "svm_diagnostics.csv", "svm_convergence.csv",
+                             "tree_regression_validation_trials.csv", "tree_classification_validation_trials.csv"):
+                self.assertFalse((root / "report" / filename).exists())
 
 
 if __name__ == "__main__":

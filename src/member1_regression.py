@@ -286,15 +286,7 @@ def run_member1_experiments(
     output.mkdir(parents=True, exist_ok=True)
     test_frame, trial_frame = pd.DataFrame(rows), pd.DataFrame(trials)
     test_frame.to_csv(output / "test_metrics.csv", index=False)
-    trial_frame.to_csv(output / "validation_trials.csv", index=False)
     pd.DataFrame(validation_rows).to_csv(output / "validation_metrics.csv", index=False)
-    diagnostic_predictions = {name: prediction for name, prediction in validation_predictions.items()
-                              if name.startswith("Custom ") or name.startswith("sklearn DecisionTree")}
-    errors, worst, by_category = validation_error_tables(prepared, diagnostic_predictions)
-    errors.to_csv(output / "validation_errors.csv", index=False)
-    worst.to_csv(output / "validation_worst_errors.csv", index=False)
-    by_category.to_csv(output / "validation_error_by_category.csv", index=False)
-    cv.to_csv(output / "cv_folds.csv", index=False)
     summary.to_csv(output / "cv_summary.csv", index=False)
     metadata = deepcopy(prepared["metadata"])
     metadata.update({
@@ -302,7 +294,6 @@ def run_member1_experiments(
         "search_feature_modes": list(FEATURE_MODES),
         "search_ridge_alphas": list(RIDGE_ALPHAS),
         "selection_metric": "validation RMSE in AZN after inverse target transformation",
-        "diagnostic_split": "validation only; top 50 absolute errors per custom model and tree baseline",
         "custom_sklearn_max_difference_AZN": differences,
         "cv_folds": cv_folds,
         "cv_note": "Training-only fixed-config descriptive CV; not nested CV and not test-set confidence intervals.",

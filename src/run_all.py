@@ -85,7 +85,7 @@ def plot_tree_feature_importances(feature_names: list[str], importances: np.ndar
     plt.barh(y_pos, top_imps, color="#3498db", edgecolor="black", alpha=0.85)
     plt.yticks(y_pos, top_names, fontsize=9)
     plt.xlabel("MDI Feature Importance", fontsize=11)
-    plt.title("Top 15 Feature Importances — sklearn DecisionTree", fontsize=12, fontweight="bold")
+    plt.title("Top 15 Feature Importances — scratch DecisionTree", fontsize=12, fontweight="bold")
     plt.grid(axis="x", linestyle=":", alpha=0.6)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
@@ -328,6 +328,7 @@ def main(argv=None) -> None:
 
     val_results: dict[str, dict[str, float]] = {}
     test_results: dict[str, dict[str, float]] = {}
+    scratch_tree_configs = {}
 
     # -------------------------------------------------------------------------
     # 2. Task A: Regression (Price Prediction)
@@ -352,6 +353,7 @@ def main(argv=None) -> None:
     # Model A4: From-scratch DecisionTree (if implemented)
     if DecisionTree is not None:
         t_start_tree = time.time()
+        print("Tuning Scratch Regression Decision Tree ")
         # candidate_depths = [4, 6, 10, 12,16]
         # candidate_leaf_sizes = [1, 5, 10, 20,30]
         # candidate_split_sizes = [2, 10, 12,15,20]
@@ -383,6 +385,7 @@ def main(argv=None) -> None:
                     "training_mae": evaluate.mae(y_train, p_train),
                     "validation_mae": mae,
                 })
+
                 if mae < best_val_score:
                     best_val_score = mae
                     best_depth, best_leaf_size = candidate_depth, candidate_leaf_size
@@ -395,6 +398,13 @@ def main(argv=None) -> None:
 
         if best_tree is None:
             raise RuntimeError("No decision-tree configuration was selected")
+        scratch_tree_configs["scratch_tree_regression"] = {
+            "task": "regression",
+            "criterion": "mse",
+            "max_depth": best_depth,
+            "min_samples_leaf": best_leaf_size,
+            "random_state": args.seed,
+        }
         t_end_tree = time.time()
         print(f"Tuning Regression Tree took {t_end_tree - t_start_tree:.6f} seconds")
 
@@ -413,10 +423,11 @@ def main(argv=None) -> None:
         }
 
         test_results["DecisionTree Reg (Scratch)"] = test_result_scratch_des_tree
-        regression_tree_trials = pd.DataFrame(regression_tree_trials)
-        regression_tree_trials.to_csv(
-            REPORT_DIR / "tree_regression_validation_trials.csv",
-            index=False,
+        best_tree.compute_feature_importances(X_train,y_train)
+        plot_tree_feature_importances(
+            feat_names,
+            best_tree.feature_importances_,
+            FIG_DIR / "tree_regression_feature_importances.png",
         )
     else:
         regression_tree_trials = pd.DataFrame()
@@ -441,11 +452,6 @@ def main(argv=None) -> None:
     selected_rff = svm_trials[svm_trials["feature_map"] == "rff"].sort_values(
         ["F1", "AUC"], ascending=False, kind="stable").iloc[0].to_dict()
 
-    svm_trials.to_csv(
-        REPORT_DIR / "svm_validation_trials.csv",
-        index=False,
-    )
-
     print(
         "     Selected:",
         {
@@ -461,6 +467,7 @@ def main(argv=None) -> None:
     )
     # Model B0: Decision Tree with tuned HyperParams
     if DecisionTree is not None:
+        print("Tuning Scratch Decision Tree Classifier")
         t_start_tree = time.time()
         # candidate_depths = [4, 6, 10, 12,16]
         # candidate_leaf_sizes = [1, 5, 10, 20,30]
@@ -518,6 +525,13 @@ def main(argv=None) -> None:
 
         if best_tree is None:
             raise RuntimeError("No decision-tree configuration was selected")
+        scratch_tree_configs["scratch_tree_classification"] = {
+            "task": "classification",
+            "criterion": best_criterion,
+            "max_depth": best_depth,
+            "min_samples_leaf": best_leaf_size,
+            "random_state": args.seed,
+        }
         t_end_tree = time.time()
         print(f"Tuning Classification Tree took {t_end_tree - t_start_tree:.6f} seconds")
         val_results["DecisionTree Classifier (Scratch)"] = val_result_scratch_tree
@@ -541,11 +555,13 @@ def main(argv=None) -> None:
         }
 
         test_results["DecisionTree Classifier (Scratch)"] = test_result_scratch_tree
-        classification_tree_trials = pd.DataFrame(classification_tree_trials)
-        classification_tree_trials.to_csv(
-            REPORT_DIR / "tree_classification_validation_trials.csv",
-            index=False,
+        best_tree.compute_feature_importances(X_train,y_tier_tr)
+        plot_tree_feature_importances(
+            feat_names,
+            best_tree.feature_importances_,
+            FIG_DIR / "tree_classification_feature_importances.png",
         )
+        
     else:
         classification_tree_trials = pd.DataFrame()
 
@@ -687,6 +703,8 @@ def main(argv=None) -> None:
     # -------------------------------------------------------------------------
     print("\n[Step 4/4] Generating error analysis figures and comparison reports...")
 
+    regression_tree_trials = pd.DataFrame(regression_tree_trials)
+    classification_tree_trials = pd.DataFrame(classification_tree_trials)
     if not regression_tree_trials.empty and not classification_tree_trials.empty:
         plot_tree_validation_curves(
             regression_tree_trials,
@@ -717,55 +735,9 @@ def main(argv=None) -> None:
     print("     - tree_validation_curves.png")
     print("     - error_analysis.png")
 
-    svm_diagnostics = pd.DataFrame([
-        {
-            "model": f"PegasosSVM ({pegasos_svm.feature_map})",
-            "feature_map": pegasos_svm.feature_map,
-            "lambda": pegasos_svm.lambda_,
-            "n_iters": pegasos_svm.n_iters,
-            "updates_per_training_row": pegasos_svm.n_iters / len(X_train),
-            "gamma": pegasos_svm.gamma,
-            "n_components": pegasos_svm.n_components,
-            "weight_norm": np.linalg.norm(pegasos_svm.w),
-            "margin_width": pegasos_svm.margin_width_,
-            "support_vector_count": len(pegasos_svm.support_indices_),
-            "final_objective": pegasos_svm.objective_history_[-1],
-            "fit_seconds": t_fit_svm,
-        },
-        {
-            "model": "PegasosSVM (RFF)",
-            "feature_map": "rff",
-            "lambda": pegasos_rff.lambda_,
-            "n_iters": pegasos_rff.n_iters,
-            "updates_per_training_row": pegasos_rff.n_iters / len(X_train),
-            "gamma": pegasos_rff.gamma,
-            "n_components": pegasos_rff.n_components,
-            "weight_norm": np.linalg.norm(pegasos_rff.w),
-            "margin_width": pegasos_rff.margin_width_,
-            "support_vector_count": len(pegasos_rff.support_indices_),
-            "final_objective": pegasos_rff.objective_history_[-1],
-            "fit_seconds": t_fit_rff,
-        },
-    ])
-
-    svm_diagnostics.to_csv(
-        REPORT_DIR / "svm_diagnostics.csv",
-        index=False,
-    )
-
-    convergence = pd.DataFrame([
-        {"model": label, "iteration": iteration, "training_objective": objective}
-        for label, model in (("PegasosSVM (Scratch)", pegasos_svm), ("PegasosSVM (RFF)", pegasos_rff))
-        for iteration, objective in zip(model.objective_iterations_, model.objective_history_)
-    ])
-
-    convergence.to_csv(
-        REPORT_DIR / "svm_convergence.csv",
-        index=False,
-    )
-
     selections = {"seed": args.seed, "regression": regression["selections"],
                   "svm_linear": selected_linear, "svm_rff": selected_rff,
+                  **scratch_tree_configs,
                   "selection_data": "training and validation only"}
     (REPORT_DIR / "selected_configs.json").write_text(
         json.dumps(selections, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
@@ -787,12 +759,8 @@ def main(argv=None) -> None:
     df_test.to_csv(REPORT_DIR / "test_summary.csv")
     print(
         f"  ✓ Exported results to {REPORT_DIR / 'validation_summary.csv'}, "
-        f"{REPORT_DIR / 'test_summary.csv'}, "
-        f"{REPORT_DIR / 'svm_validation_trials.csv'}, "
-        f"{REPORT_DIR / 'tree_regression_validation_trials.csv'}, "
-        f"{REPORT_DIR / 'tree_classification_validation_trials.csv'}, "
-        f"{REPORT_DIR / 'svm_diagnostics.csv'}, and "
-        f"{REPORT_DIR / 'svm_convergence.csv'}"
+        f"{REPORT_DIR / 'test_summary.csv'}, and "
+        f"{REPORT_DIR / 'selected_configs.json'}"
     )
     print("\n✓ Pipeline execution complete.")
 

@@ -301,9 +301,7 @@ class ExperimentTests(unittest.TestCase):
             np.testing.assert_array_equal(self.prepared[name], expected)
         self.assertEqual(json.dumps(self.prepared["metadata"], sort_keys=True), metadata_before)
         self.assertEqual({path.name for path in output.iterdir()}, {
-            "metadata.json", "test_metrics.csv", "validation_trials.csv", "cv_folds.csv", "cv_summary.csv",
-            "validation_metrics.csv", "validation_errors.csv", "validation_worst_errors.csv",
-            "validation_error_by_category.csv"})
+            "metadata.json", "test_metrics.csv", "cv_summary.csv", "validation_metrics.csv"})
         self.assertEqual(len(result["test_metrics"]), 6)
         metadata = json.loads((output / "metadata.json").read_text(encoding="utf-8"))
         self.assertNotIn("split_row_ids", metadata)

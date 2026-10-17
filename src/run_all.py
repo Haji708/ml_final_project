@@ -28,14 +28,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from . import data_prep
-from . import evaluate
-from .linear_regression import RidgeRegressionNormalEquation
-from .svm import PegasosSVM
+import data_prep
+import evaluate
+from linear_regression import RidgeRegressionNormalEquation
+from svm import PegasosSVM
 
 # Optional from-scratch decision tree
 try:
-    from .decision_tree import DecisionTree
+    from decision_tree import DecisionTree
 except ImportError:
     DecisionTree = None
 
@@ -83,11 +83,62 @@ def plot_tree_feature_importances(feature_names: list[str], importances: np.ndar
     plt.barh(y_pos, top_imps, color="#3498db", edgecolor="black", alpha=0.85)
     plt.yticks(y_pos, top_names, fontsize=9)
     plt.xlabel("MDI Feature Importance", fontsize=11)
-    plt.title("Top 15 Feature Importances — DecisionTree", fontsize=12, fontweight="bold")
+    plt.title("Top 15 Feature Importances — sklearn DecisionTree", fontsize=12, fontweight="bold")
     plt.grid(axis="x", linestyle=":", alpha=0.6)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
     plt.close()
+
+
+def plot_tree_validation_curves(
+    regression_trials: pd.DataFrame,
+    classification_trials: pd.DataFrame,
+    save_path: Path,
+) -> None:
+    """Plot scratch-tree training and validation scores across depth settings."""
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    for leaf_size, trials in regression_trials.groupby("min_samples_leaf"):
+        trials = trials.sort_values("max_depth")
+        axes[0].plot(
+            trials["max_depth"], trials["training_mae"],
+            marker="o", linestyle="--", label=f"leaf={leaf_size} train",
+        )
+        axes[0].plot(
+            trials["max_depth"], trials["validation_mae"],
+            marker="o", label=f"leaf={leaf_size} validation",
+        )
+    axes[0].set_title("Scratch Regression Tree")
+    axes[0].set_ylabel("MAE (AZN)")
+    axes[0].set_xlabel("Maximum depth")
+    axes[0].legend(fontsize=8)
+
+    for axis, criterion in zip(axes[1:], ("gini", "entropy")):
+        criterion_trials = classification_trials[
+            classification_trials["criterion"] == criterion
+        ]
+        for leaf_size, trials in criterion_trials.groupby("min_samples_leaf"):
+            trials = trials.sort_values("max_depth")
+            axis.plot(
+                trials["max_depth"], trials["training_f1"],
+                marker="o", linestyle="--", label=f"leaf={leaf_size} train",
+            )
+            axis.plot(
+                trials["max_depth"], trials["validation_f1"],
+                marker="o", label=f"leaf={leaf_size} validation",
+            )
+        axis.set_title(f"Scratch Classification Tree ({criterion})")
+        axis.set_xlabel("Maximum depth")
+        axis.legend(fontsize=8)
+
+    for axis in axes:
+        axis.set_xticks(sorted(regression_trials["max_depth"].unique()))
+        axis.grid(True, linestyle=":", alpha=0.6)
+    axes[1].set_ylabel("F1 score")
+    axes[2].set_ylabel("F1 score")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=300)
+    plt.close(fig)
 
 
 def plot_error_analysis(
@@ -335,23 +386,79 @@ def main() -> None:
 
     # Model A4: From-scratch DecisionTree (if implemented)
     if DecisionTree is not None:
-        try:
-            tree_reg = DecisionTree(task="regression", criterion="mse", max_depth=10, random_state=42)
-            tree_reg.fit(X_train, y_train)
-            p_val = tree_reg.predict(X_val)
-            p_test = tree_reg.predict(X_test)
-            val_results["DecisionTree Reg (Scratch)"] = {
-                "RMSE": evaluate.rmse(y_val, p_val),
-                "MAE": evaluate.mae(y_val, p_val),
-                "R2": evaluate.r2(y_val, p_val),
-            }
-            test_results["DecisionTree Reg (Scratch)"] = {
-                "RMSE": evaluate.rmse(y_test, p_test),
-                "MAE": evaluate.mae(y_test, p_test),
-                "R2": evaluate.r2(y_test, p_test),
-            }
-        except (NotImplementedError, Exception):
-            pass
+        t_start_tree = time.time()
+        #candidate_depths = [4, 6, 10, 12,16]
+        #candidate_leaf_sizes = [1, 5, 10, 20,30]
+        #candidate_split_sizes = [2, 10, 12,15,20]
+        candidate_depths = [5, 10,15]
+        candidate_leaf_sizes = [1, 5, 10]
+        
+        best_val_score = float("inf")
+        best_depth,best_leaf_size = (0,0)
+        best_tree = None
+        test_result_scratch_des_tree={}
+        val_result_scratch_des_tree={} 
+        regression_tree_trials = []
+        for candidate_depth in candidate_depths:
+            for candidate_leaf_size in candidate_leaf_sizes:
+                
+                tree_reg = DecisionTree(task="regression", 
+                                            criterion="mse", max_depth=candidate_depth, 
+                                            random_state=42, 
+                                            min_samples_leaf=candidate_leaf_size,
+                                            
+                                          )
+                tree_reg.fit(X_train, y_train)
+                p_train = tree_reg.predict(X_train)
+                p_val = tree_reg.predict(X_val)
+                mae = evaluate.mae(y_val, p_val)
+                regression_tree_trials.append({
+                    "max_depth": candidate_depth,
+                    "min_samples_leaf": candidate_leaf_size,
+                    "training_mae": evaluate.mae(y_train, p_train),
+                    "validation_mae": mae,
+                })
+                if mae<best_val_score:
+                    best_val_score = mae
+                    best_depth,best_leaf_size = candidate_depth , candidate_leaf_size 
+                    best_tree = tree_reg
+                    val_result_scratch_des_tree ={
+                                "RMSE": evaluate.rmse(y_val, p_val),
+                                "MAE": evaluate.mae(y_val, p_val),
+                                "R2": evaluate.r2(y_val, p_val),
+                            }
+                            
+                            
+        
+        if best_tree is None:
+            raise RuntimeError("No decision-tree configuration was selected")
+        t_end_tree = time.time()
+        print(f"Tuning Regression Tree took {t_end_tree- t_start_tree:.6f} seconds")
+
+        val_results["DecisionTree Reg (Scratch)"] = val_result_scratch_des_tree
+        print(
+            f"Selected scratch tree: depth={best_depth}, "
+            f"min_samples_leaf={best_leaf_size}, "
+            f"validation MAE={best_val_score:.2f}"
+        )
+
+        p_test = best_tree.predict(X_test)
+
+        test_result_scratch_des_tree ={
+                                "RMSE": evaluate.rmse(y_test, p_test),
+                                "MAE": evaluate.mae(y_test, p_test),
+                                "R2": evaluate.r2(y_test, p_test),
+                            }
+                       
+                    
+        test_results["DecisionTree Reg (Scratch)"] = test_result_scratch_des_tree
+        regression_tree_trials = pd.DataFrame(regression_tree_trials)
+        regression_tree_trials.to_csv(
+            REPORT_DIR / "tree_regression_validation_trials.csv",
+            index=False,
+        )
+    else:
+        regression_tree_trials = pd.DataFrame()
 
     # -------------------------------------------------------------------------
     # 3. Task B: Classification (Price Tier)
@@ -385,6 +492,102 @@ def main() -> None:
         },
         f"with validation F1={best_svm_config['F1']:.4f}",
     )
+    # Model B0: Decision Tree with tuned HyperParams
+    if DecisionTree is not None:
+        t_start_tree = time.time()
+        #candidate_depths = [4, 6, 10, 12,16]
+        #candidate_leaf_sizes = [1, 5, 10, 20,30]
+        #candidate_split_sizes = [2, 10, 12,15,20]
+        candidate_depths = [5, 10,15]
+        candidate_leaf_sizes = [1, 5, 10]
+        
+        best_val_score = float("-inf")
+        best_depth,best_leaf_size = (0,0)
+        best_tree = None
+        test_result_scratch_tree={}
+        val_result_scratch_des_tree={}
+        classification_tree_trials = []
+        for criterion in ["gini",'entropy']: 
+            for candidate_depth in candidate_depths:
+                for candidate_leaf_size in candidate_leaf_sizes:
+                    
+                    tree_clf = DecisionTree(task="classification", 
+                                                criterion=criterion, max_depth=candidate_depth, 
+                                                random_state=42, 
+                                                min_samples_leaf=candidate_leaf_size,
+                                                
+                                            )
+                    tree_clf.fit(X_train, y_tier_tr)
+                    p_train = tree_clf.predict(X_train)
+                    p_val = tree_clf.predict(X_val)
+                    scores_val = tree_clf.predict_proba(X_val)[:, 1]
+
+                    _, _, training_f1 = evaluate.precision_recall_f1(
+                        y_tier_tr,
+                        p_train,
+                    )
+                    precision, recall, f1 = evaluate.precision_recall_f1(y_tier_val, p_val)
+                    auc = evaluate.roc_auc(y_tier_val, scores_val)
+                    classification_tree_trials.append({
+                        "criterion": criterion,
+                        "max_depth": candidate_depth,
+                        "min_samples_leaf": candidate_leaf_size,
+                        "training_f1": training_f1,
+                        "validation_f1": f1,
+                    })
+
+                    if f1 > best_val_score:
+                        best_val_score = f1
+                        best_depth = candidate_depth
+                        best_leaf_size = candidate_leaf_size
+                        best_criterion = criterion
+                        best_tree = tree_clf
+                        val_result_scratch_tree = {
+                            "Precision": precision,
+                            "Recall": recall,
+                            "F1": f1,
+                            "AUC": auc,
+                        }
+                            
+                            
+        
+        if best_tree is None:
+            raise RuntimeError("No decision-tree configuration was selected")
+        t_end_tree = time.time()
+        print(f"Tuning Classification Tree took {t_end_tree- t_start_tree:.6f} seconds")
+        val_results["DecisionTree Classifier (Scratch)"] = val_result_scratch_tree
+        print(
+            f"Selected scratch tree: criterion={best_criterion}, depth={best_depth}, "
+            f"Selected scratch tree: depth={best_depth}, "
+            f"min_samples_leaf={best_leaf_size}, "
+            f"validation F1={best_val_score:.2f}"
+        )
+
+        scores_test = best_tree.predict_proba(X_test)[:, 1]
+        p_test = best_tree.predict(X_test)
+        
+
+        precision, recall, f1 = evaluate.precision_recall_f1(y_tier_test, p_test)
+        auc = evaluate.roc_auc(y_tier_test, scores_test)
+        
+        
+        test_result_scratch_tree = {
+                            "Precision": precision,
+                            "Recall": recall,
+                            "F1": f1,
+                            "AUC": auc,
+                    }
+        
+                       
+                    
+        test_results["DecisionTree Classifier (Scratch)"] = test_result_scratch_tree 
+        classification_tree_trials = pd.DataFrame(classification_tree_trials)
+        classification_tree_trials.to_csv(
+            REPORT_DIR / "tree_classification_validation_trials.csv",
+            index=False,
+        )
+    else:
+        classification_tree_trials = pd.DataFrame()
 
     # Model B1: validation-selected From-Scratch Pegasos Soft-Margin SVM
     print("  -> Training validation-selected From-Scratch Pegasos SVM...")
@@ -535,10 +738,18 @@ def main() -> None:
     test_results["DecisionTree Clf (sklearn)"] = {"Precision": p_t, "Recall": r_t, "F1": f1_t, "AUC": auc_t}
     print(f"     Val F1: {f1_v:.4f}, AUC: {auc_v:.4f} (fit: {t_fit_dt_clf:.2f}s)")
 
+    
     # -------------------------------------------------------------------------
     # 4. Error Analysis, Figure Generation & Table Output
     # -------------------------------------------------------------------------
     print("\n[Step 4/4] Generating error analysis figures and comparison reports...")
+
+    if not regression_tree_trials.empty and not classification_tree_trials.empty:
+        plot_tree_validation_curves(
+            regression_tree_trials,
+            classification_tree_trials,
+            FIG_DIR / "tree_validation_curves.png",
+        )
 
     if pegasos_svm.feature_map == "linear":
         plot_svm_weights(
@@ -559,6 +770,7 @@ def main() -> None:
     print("  ✓ Saved figures to report/figures/:")
     print("     - svm_feature_weights.png")
     print("     - tree_feature_importances.png")
+    print("     - tree_validation_curves.png")
     print("     - error_analysis.png")
 
     svm_diagnostics = pd.DataFrame([
@@ -626,6 +838,8 @@ def main() -> None:
         f"  ✓ Exported results to {REPORT_DIR / 'validation_summary.csv'}, "
         f"{REPORT_DIR / 'test_summary.csv'}, "
         f"{REPORT_DIR / 'svm_validation_trials.csv'}, "
+        f"{REPORT_DIR / 'tree_regression_validation_trials.csv'}, "
+        f"{REPORT_DIR / 'tree_classification_validation_trials.csv'}, "
         f"{REPORT_DIR / 'svm_diagnostics.csv'}, and "
         f"{REPORT_DIR / 'svm_convergence.csv'}"
     )

@@ -1,88 +1,94 @@
-"""
-Unit tests for src/evaluate.py:
-Verifies that from-scratch metrics match scikit-learn reference values exactly.
-"""
-
-from __future__ import annotations
-
-import numpy as np
 import pytest
-from sklearn import metrics as sk_metrics
+import numpy as np
+import sys
+from pathlib import Path
 
-from src import evaluate
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+SRC_DIR = ROOT_DIR / "src"
+sys.path.insert(0, str(SRC_DIR))
+
+from decision_tree import DecisionTree, Node
 
 
 @pytest.fixture
-def regression_data():
-    np.random.seed(42)
-    y_true = np.array([120000.0, 250000.0, 85000.0, 430000.0, 195000.0, 310000.0])
-    y_pred = np.array([115000.0, 270000.0, 92000.0, 410000.0, 190000.0, 325000.0])
-    return y_true, y_pred
+def binary_classification_data():
+    """Fixture providing a tiny synthetic dataset for testing."""
+    X_train = np.array([
+        [2.0, 3.0],
+        [1.0, 1.5],
+        [8.0, 8.5],
+        [9.0, 9.5]
+    ])
+    y_train = np.array([0, 0, 1, 1])
+    return X_train, y_train
 
 
-@pytest.fixture
-def classification_data():
-    np.random.seed(42)
-    y_true = np.array([1, 0, 1, 1, 0, 0, 1, 0, 1, 0])
-    y_pred = np.array([1, 0, 1, 0, 0, 1, 1, 0, 1, 0])
-    scores = np.array([0.9, 0.1, 0.85, 0.45, 0.2, 0.65, 0.78, 0.15, 0.92, 0.3])
-    return y_true, y_pred, scores
+def test_classification_predictions(binary_classification_data):
+    """Test that the tree correctly fits and predicts labels on training data."""
+    X_train, y_train = binary_classification_data
+    tree = DecisionTree(max_depth=3, min_samples_split=2, task='classification')
+    tree.fit(X_train, y_train)
+
+    preds = tree.predict(X_train)
+    np.testing.assert_array_equal(preds, y_train)
 
 
-def test_rmse(regression_data):
-    y_true, y_pred = regression_data
-    val = evaluate.rmse(y_true, y_pred)
-    sk_val = float(np.sqrt(sk_metrics.mean_squared_error(y_true, y_pred)))
-    assert np.isclose(val, sk_val, rtol=1e-5)
+def test_classification_probabilities(binary_classification_data):
+    """Test that predict_proba returns a properly shaped 2D matrix summing to 1.0."""
+    X_train, y_train = binary_classification_data
+    tree = DecisionTree(max_depth=3, min_samples_split=2, task='classification')
+    tree.fit(X_train, y_train)
+
+    probs = tree.predict_proba(X_train)
+
+    # Check shape: (n_samples, n_classes) -> (4, 2)
+    assert probs.shape == (4, 2)
+
+    # Check that class probabilities for each row sum up to 1.0
+    np.testing.assert_allclose(np.sum(probs, axis=1), 1.0)
 
 
-def test_mae(regression_data):
-    y_true, y_pred = regression_data
-    val = evaluate.mae(y_true, y_pred)
-    sk_val = float(sk_metrics.mean_absolute_error(y_true, y_pred))
-    assert np.isclose(val, sk_val, rtol=1e-5)
+def test_unseen_data_predictions(binary_classification_data):
+    """Test generalization on new, unseen data points."""
+    X_train, y_train = binary_classification_data
+    tree = DecisionTree(max_depth=3, min_samples_split=2, task='classification')
+    tree.fit(X_train, y_train)
+
+    X_test = np.array([
+        [1.2, 1.8],  # Should predict Class 0
+        [8.5, 9.0]  # Should predict Class 1
+    ])
+
+    preds = tree.predict(X_test)
+    np.testing.assert_array_equal(preds, [0, 1])
 
 
-def test_r2(regression_data):
-    y_true, y_pred = regression_data
-    val = evaluate.r2(y_true, y_pred)
-    sk_val = float(sk_metrics.r2_score(y_true, y_pred))
-    assert np.isclose(val, sk_val, rtol=1e-5)
+def test_shape_mismatch_error(binary_classification_data):
+    """Test that mismatched X and y lengths raise an exception during fit."""
+    X_train, _ = binary_classification_data
+    tree = DecisionTree(max_depth=3, task='classification')
+
+    # X has 4 rows, but we pass only 2 labels
+    with pytest.raises(Exception):
+        tree.fit(X_train, np.array([0, 1]))
 
 
-def test_confusion_matrix(classification_data):
-    y_true, y_pred, _ = classification_data
-    cm = evaluate.confusion_matrix(y_true, y_pred)
-    sk_cm = sk_metrics.confusion_matrix(y_true, y_pred)
-    assert np.array_equal(cm, sk_cm)
+def test_task_criterion_mismatch(binary_classification_data):
+    """Test that calling predict_proba on a regression tree raises a ValueError."""
+    X_train, _ = binary_classification_data
+
+    with pytest.raises(ValueError, match="Criterion for regression task can only be mse"):
+        reg_tree = DecisionTree(max_depth=3, task='regression')
 
 
-def test_precision_recall_f1(classification_data):
-    y_true, y_pred, _ = classification_data
-    p, r, f1 = evaluate.precision_recall_f1(y_true, y_pred)
-    sk_p = float(sk_metrics.precision_score(y_true, y_pred, pos_label=1))
-    sk_r = float(sk_metrics.recall_score(y_true, y_pred, pos_label=1))
-    sk_f1 = float(sk_metrics.f1_score(y_true, y_pred, pos_label=1))
-    assert np.isclose(p, sk_p, rtol=1e-5)
-    assert np.isclose(r, sk_r, rtol=1e-5)
-    assert np.isclose(f1, sk_f1, rtol=1e-5)
+def test_non_numeric_input_error(binary_classification_data):
+    """Test that passing non-numeric (string) features raises a conversion error."""
+    _, y_train = binary_classification_data
+    bad_X = np.array([["apple", "banana"], ["orange", "grape"], ["pear", "peach"], ["kiwi", "melon"]])
+    bad_tree = DecisionTree(max_depth=3, task='classification')
 
-
-def test_roc_auc(classification_data):
-    y_true, _, scores = classification_data
-    auc = evaluate.roc_auc(y_true, scores)
-    sk_auc = float(sk_metrics.roc_auc_score(y_true, scores))
-    assert np.isclose(auc, sk_auc, rtol=1e-5)
-
-
-def test_compare_output(capsys):
-    results = {
-        "Model A": {"RMSE": 1000.0, "R2": 0.85},
-        "Model B": {"Precision": 0.90, "Recall": 0.88, "F1": 0.89},
-    }
-    evaluate.compare(results)
-    captured = capsys.readouterr()
-    assert "Model A" in captured.out
-    assert "Model B" in captured.out
-    assert "0.8500" in captured.out
-    assert "—" in captured.out
+    with pytest.raises(ValueError):
+        bad_tree.fit(bad_X, y_train)

@@ -133,9 +133,7 @@ class PegasosSVM:
         X_transformed = self._transform_features(X)
 
         self.X_train_ = X.copy()
-        # RFF matrices can be large; the local transform is already owned by
-        # this fit, so an additional full-size copy is unnecessary.
-        self.X_train_transformed_ = X_transformed
+        self.X_train_transformed_ = X_transformed.copy()
         self.y_pm1_ = y_pm1.copy()
 
         self.w = np.zeros(X_transformed.shape[1])

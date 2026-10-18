@@ -93,7 +93,7 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(rff["feature_map"], "rff")
             self.assertGreater(rff["n_iters"], 0)
             self.assertGreater(rff["n_components"], 0)
-            self.assertAlmostEqual(summary.loc["PegasosSVM (RFF)", "F1"], rff.F1)
+            self.assertAlmostEqual(summary.loc["PegasosSVM (RFF)", "F1"], rff["F1"])
             for key in ("scratch_tree_regression", "scratch_tree_classification"):
                 self.assertIn(key, configs)
                 self.assertGreater(configs[key]["max_depth"], 0)

@@ -17,7 +17,10 @@ Suggested design:
 from __future__ import annotations
 import pandas as pd
 import numpy as np
-import data_prep
+try:
+    from . import data_prep
+except ImportError:
+    import data_prep
 import time
 
 class Node:

@@ -51,11 +51,13 @@
 \twocolumn[
   \begin{@twocolumnfalse}
   \begin{center}
-    {\LARGE\bfseries Your Project Title Here:\\A Clear, Specific Subtitle\par}
+    {\LARGE\bfseries Real-Estate Price Prediction:\\
+    From-Scratch Trees and Pegasos SVMs\par}
     \vspace{1.2em}
     % Authors: Surname, Given name --- alphabetical by surname.
     {\large
-      Aliyeva, Aysel\quad Mammadov, Murad\quad Rustamli, Rustam\par}
+      Babayev, Mahhamadali\quad Hajiyev, Ilham\quad
+      Javadzade, Mahammad\quad Isgandarli, Fariz\par}
     \vspace{0.5em}
     {\itshape MLE-AI-201 Machine Learning, AI Academy --- Cohort II\par}
     \vspace{1.4em}
@@ -63,14 +65,21 @@
   \begin{quote}
     \small
     \abstractkw{Abstract---}% IEEE uses an em-dash after "Abstract"
-    One paragraph, roughly 150--250 words. State the problem (price
-    prediction and the derived price-tier task on the bina.az dataset),
-    what you built from scratch (a decision tree and an SVM), the key
-    result (headline metrics vs.\ scikit-learn), and the main takeaway.
-    Write it last. \textbf{End the abstract with your repository link},
-    per IEEE convention:
-    \href{https://github.com/your-team/your-repo}{\texttt{github.com/your-team/your-repo}}
-    (tag \texttt{v1.0-final}).
+    We study Azerbaijani real-estate listings from bina.az through two
+    supervised tasks: predicting price in AZN and classifying listings as
+    standard or premium relative to the training median. The pipeline
+    cleans mixed-type fields, removes target-derived leakage, encodes
+    categoricals, and fits imputation and scaling using training data only.
+    We implement a NumPy decision tree and a Pegasos soft-margin SVM, with
+    Random Fourier Features (RFF) as a nonlinear extension, and compare
+    them with scikit-learn baselines. On the held-out test split, the
+    scratch tree obtains RMSE 380,596 AZN and $R^2=0.688$ for regression;
+    the scratch linear Pegasos model obtains F1 0.826 and ROC-AUC 0.911.
+    The scikit-learn tree gives the highest classification F1 (0.930) and
+    ROC-AUC (0.967). Linear Pegasos remains competitive with linear
+    baselines, whereas RFF is sensitive to bandwidth and finite feature
+    dimension. Code is available at
+    \href{https://github.com/Haji708/ml_final_project}{\texttt{github.com/Haji708/ml\_final\_project}}.
 
     \vspace{0.6em}
     \abstractkw{Index Terms---}decision tree, support-vector machine,
@@ -82,21 +91,40 @@
 
 % =====================================================================
 \section{Introduction}
-Motivate the problem and state your contributions as a short bulleted or
-inline list. What is the task, why does it matter, and what did your
-team do? Keep background brief; cite sources like this~\cite{pegasos}.
+Online property markets contain heterogeneous numeric, categorical, and
+geospatial signals. We frame the problem as Task A, price regression, and
+Task B, binary price-tier classification. Our contributions are a shared
+leakage-aware preprocessing pipeline, NumPy implementations of a decision
+tree and Pegasos SVM, an RFF extension, and matched scikit-learn benchmarks.
 
 \section{Related Work / Background}
-Briefly place your work in context: decision trees (impurity, information
-gain), the soft-margin SVM and the hinge-loss primal, and the Pegasos
-sub-gradient solver you used~\cite{pegasos}. One or two short paragraphs.
+The tree recursively chooses numeric thresholds that maximize weighted
+impurity reduction. Gini impurity and entropy are used for classification,
+while variance/MSE reduction is used for regression. Leaves predict the
+majority class and class frequencies, or the mean target. The SVM minimizes
+the regularized hinge-loss primal with stochastic sub-gradient updates.
+Pegasos avoids a quadratic-programming solver and uses
+$\eta_t=1/(\lambda t)$~\cite{pegasos}. RFF approximates an RBF feature map
+before applying the same linear optimizer.
 
 \section{Data and Preprocessing}
-Describe the bina.az dataset: size, key columns, and the cleaning you
-did (currency, types, missing values, duplicates, outliers). State the
-two tasks (price regression; price-tier classification), how you derived
-the tier label, and your train/validation/test split. \textbf{Name the
-leakage columns you removed and why.}
+The downloaded bina.az snapshot contains 100,775 raw listings. We enforce
+AZN prices, coerce numeric strings, parse mixed units, and remove 34
+records outside the fixed eligibility range
+$1{,}000\leq\text{price}\leq20{,}000{,}000$ AZN. Exact duplicates and
+duplicate identifiers were absent. Missing numeric values use
+training-fitted medians and missingness indicators; categorical values are
+fitted from the training partition. The resulting modelling dataset has
+100,705 rows and 178 encoded features.
+
+Task A predicts price and uses RMSE, MAE, and $R^2$. Task B defines
+premium as price above the training median of 218,000 AZN and standard
+otherwise; it uses precision, recall, F1, and ROC-AUC. The deterministic
+seed-42 split is 70,493/15,106/15,106 train/validation/test rows, sampled
+within price-rank strata. This balances price ranks but is not exact binary
+tier stratification. The leakage columns \texttt{unit\_price} and
+\texttt{total\_price} are removed because they reveal or derive the target.
+IDs, URLs, owner names, addresses, and free text are also excluded.
 
 \begin{table}[t]
   \centering
@@ -106,71 +134,125 @@ leakage columns you removed and why.}
     \toprule
     Property & Value \\
     \midrule
-    Rows (after cleaning)       & --- \\
-    Features used               & --- \\
-    Train / Val / Test split    & --- / --- / --- \\
-    Price-tier balance (\%)     & --- \\
+    Rows (after cleaning)       & 100,705 \\
+    Features used               & 178 encoded features \\
+    Train / Val / Test split    & 70,493 / 15,106 / 15,106 \\
+    Training tier balance      & 50.14\% / 49.86\% \\
     \bottomrule
   \end{tabular}
 \end{table}
 
 \section{Method}
 \subsection{Decision tree (from scratch)}
-Describe your impurity criteria (Gini / entropy / MSE reduction), the
-split search, recursion, leaf rule, and hyperparameters.
+For each candidate feature, values are sorted and thresholds are tested
+between distinct adjacent values. The selected split maximizes parent
+impurity minus the sample-weighted child impurities. Growth is recursive
+and stops at maximum depth, insufficient samples, invalid child sizes, or
+non-positive impurity reduction. Classification leaves store class
+probabilities and predict the majority class; regression leaves predict
+the target mean. Validation experiments use depth and minimum-leaf
+controls to limit overfitting, with Gini, entropy, or MSE selected
+according to the task.
 
 \subsection{Support-vector machine (from scratch)}
-State the objective and the Pegasos update you implemented:
+The objective and Pegasos update are:
 \begin{equation}
   J(\mathbf{w},b)=\tfrac{\lambda}{2}\lVert\mathbf{w}\rVert^{2}
   +\tfrac{1}{n}\sum_{i=1}^{n}\max\!\big(0,\,1-y_i(\mathbf{w}^{\top}\mathbf{x}_i+b)\big).
 \end{equation}
-Explain the learning-rate schedule, feature scaling, and your non-linear
-extension (kernelised Pegasos or random Fourier features), if any.
+Labels are mapped to $\{-1,+1\}$. At step $t$, a sampled example with
+margin $m_i=y_i(\mathbf{w}^{\top}\mathbf{x}_i+b)<1$ updates both weights
+and bias; otherwise only regularization shrinkage is applied to
+$\mathbf{w}$. The implementation records the objective during fitting.
+All SVM inputs are standardized using training means and scales only.
+The nonlinear extension uses RFF:
+\[
+\phi(\mathbf{x})=\sqrt{2/D}\cos(\mathbf{x}W+\mathbf{r}),
+\]
+where $W$ and $\mathbf{r}$ are generated once during fitting and reused
+at prediction time. Support vectors satisfy
+$y_i f(\mathbf{x}_i)\leq1+10^{-6}$, and the geometric margin width is
+$2/\lVert\mathbf{w}\rVert$.
 
 \section{Experimental Setup}
-Metrics (RMSE/MAE/$R^2$ for regression; precision/recall/F1/AUC for
-classification), hyperparameter search protocol, seeds, and the
-scikit-learn baselines you compared against (with matched settings).
+We report RMSE, MAE, and $R^2$ for Task A, and precision, recall, F1,
+ROC-AUC, and confusion-matrix diagnostics for Task B. Hyperparameters are
+selected on validation data only. The linear Pegasos sweep tests
+$\lambda\in\{10^{-5},10^{-4},10^{-3}\}$; RFF trials vary bandwidth and
+component count. The selected linear model uses $\lambda=10^{-3}$,
+50,000 updates, and the fixed seed is 42. Baselines include
+normal-equation Ridge, scikit-learn Ridge, DecisionTreeRegressor/
+Classifier, SGDClassifier with hinge loss, and LinearSVC.
 
 \section{Results}
 Lead with a results table; back every claim with a number or figure.
 
 \begin{table}[t]
   \centering
-  \caption{Headline results (test set, mean $\pm$ std over folds).}
+  \caption{Headline results on the held-out test set.}
   \label{tab:results}
   \begin{tabular}{@{}lcc@{}}
     \toprule
     Model & Task A (RMSE) & Task B (F1) \\
     \midrule
-    Ours: decision tree     & --- & --- \\
-    Ours: SVM (Pegasos)     & n/a & --- \\
-    scikit-learn baseline   & --- & --- \\
+    Ours: decision tree     & 380,596 & 0.941 \\
+    Ours: SVM (Pegasos)     & n/a & 0.826 \\
+    scikit-learn baseline   & 401,341 & 0.930 \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\begin{figure}[t]
+\begin{figure*}[!t]
   \centering
-  % \includegraphics[width=\linewidth]{figures/your_plot.pdf}
-  \fbox{\parbox[c][3.2cm][c]{0.9\linewidth}{\centering\small
-    Replace with a figure (e.g.\ validation curve, confusion matrix,
-    or feature importances). Save plots to \texttt{figures/}.}}
-  \caption{One clear figure beats ten decorative ones.}
+  \includegraphics[width=0.47\textwidth]{figures/regression_validation.png}
+  \hfill
+  \includegraphics[width=0.47\textwidth]{figures/classification_validation.png}
+  \par\vspace{0.5em}
+  \includegraphics[width=0.47\textwidth]{figures/svm_convergence.png}
+  \hfill
+  \includegraphics[width=0.47\textwidth]{figures/error_analysis.png}
+  \caption{Validation performance, Pegasos objective convergence, and test
+  error analysis. Regression RMSE is lower-is-better; classification F1 is
+  higher-is-better.}
   \label{fig:main}
-\end{figure}
+\end{figure*}
 
 \section{Discussion and Limitations}
-Where and why each model fails (luxury outliers, sparse districts,
-scaling effects), the bias--variance story, and honest limitations.
+The scratch tree gives the best reported regression test performance
+(RMSE 380,596 AZN, MAE 71,856 AZN, $R^2=0.688$), improving on the
+scikit-learn tree's RMSE 401,341 AZN. For classification, the
+scikit-learn tree is strongest overall (F1 0.930, ROC-AUC 0.967), while
+linear Pegasos reaches F1 0.826 and ROC-AUC 0.911. Its result is close
+to SGDClassifier (F1 0.838) and LinearSVC (F1 0.835), supporting the
+correctness of the from-scratch linear solver.
+
+RFF is a valid nonlinear extension but is sensitive to bandwidth, random
+approximation error, and component count. On this snapshot its test F1
+is 0.832 and ROC-AUC is 0.908, so the finite approximation did not
+improve on the linear boundary. Large residuals are expected for luxury
+listings and sparse locations; a single global model cannot fully
+represent local market effects. The fixed split is not cross-validated,
+so these values quantify this snapshot rather than uncertainty across
+folds. Future work should add repeated or temporal validation, richer
+geospatial features, and systematic RFF bandwidth tuning.
 
 \section{Conclusion}
-One short paragraph: what you found and what you would do next.
+The project demonstrates a complete leakage-aware workflow for bina.az
+price prediction and price-tier classification. From-scratch Pegasos
+matches the expected hinge-loss formulation and remains competitive with
+linear scikit-learn baselines, while the custom tree captures stronger
+nonlinear structure in this dataset. The next priority is repeated or
+time-based validation and fuller analysis of regional and luxury-listing
+errors.
 
 \section*{Tools and Acknowledgements}
-Disclose any AI-assistant use and what it was used for, plus data/code
-you built on. (Required.)
+The team used NumPy, pandas, matplotlib, and scikit-learn for data
+processing, modelling, evaluation, and plotting. An AI coding assistant
+was used for code navigation, debugging suggestions, LaTeX editing, and
+test-oriented review; all generated changes were inspected and validated
+by the team. The raw bina.az data were downloaded from the Kaggle
+\texttt{binaaz-sale-project} dataset by Sehriyar Memmedli and are not
+redistributed in this repository.
 
 % =====================================================================
 \begin{thebibliography}{9}

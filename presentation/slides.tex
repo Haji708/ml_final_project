@@ -71,17 +71,19 @@
         median; standard otherwise. Report precision, recall, F1, and ROC-AUC.
       \end{block}
     \column{0.43\textwidth}
-      \large\bfseries Dataset snapshot\par\vspace{0.25cm}
+      \small\bfseries Dataset snapshot\par\vspace{0.25cm}
+      \scriptsize
       \begin{tabular}{@{}lr@{}}
         Raw listings & 100,775\\
         Clean listings & 100,705\\
         Encoded features & 178\\
-        Train / validation / test & 70 / 15 / 15\%\\
+        Split & 70 / 15 / 15\%\\
         Tier threshold & 218,000 AZN\\
       \end{tabular}
       \vspace{0.4cm}\par
-      \small Seeded, proportional sampling within price-rank strata; the
-      tier cutoff is computed from training data only.
+      \small\raggedright
+      Seeded, proportional sampling within price-rank strata; the tier cutoff
+      is computed from training data only.
   \end{columns}
 \end{frame}
 
@@ -119,18 +121,20 @@
         \item Gini and entropy for classification; variance/MSE for regression.
         \item Stopping controls include maximum depth, minimum split/leaf
           counts, and minimum impurity decrease.
-        \item Select tree settings using validation performance only( limited tuning  due to O(candidates^p ) complexity).
-        \item         Fitting data takes    O(depth*features*rows*log(rows)) time.
+        \item Select tree settings using validation performance only
+          (limited tuning due to \(O(\mathrm{candidates}^{p})\) complexity).
+        \item Fitting data takes
+          \(O(\mathrm{depth}\cdot\mathrm{features}\cdot\mathrm{rows}
+          \cdot\log(\mathrm{rows}))\) time.
       \end{itemize}
       \vspace{0.2cm}
       \small Selected scratch settings: regression, MSE, depth 15, leaf 1;
       classification, entropy, depth 15, leaf 1.
     \column{0.48\textwidth}
       \centering
-      \includegraphics[width=\linewidth,height=0.48\textheight,keepaspectratio]{tree_validation_curves.png}
+      \includegraphics[width=\linewidth,height=0.48\textheight,keepaspectratio]{tree_feature_importances.png}
       \vspace{0.1cm}\par
-      {\scriptsize Validation curves show the depth/leaf trade-off used in
-      model selection.}
+      {\scriptsize Impurity-based feature importances from the selected tree.}
   \end{columns}
 \end{frame}
 
@@ -177,6 +181,32 @@
     Validation results support model selection; test results provide the final
     held-out evaluation. Regression errors are in AZN.
   \end{beamercolorbox}
+\end{frame}
+
+\begin{frame}{Validation plots}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.49\textwidth}
+      \centering
+      \includegraphics[width=\linewidth,height=0.62\textheight,keepaspectratio]{regression_validation.png}
+      {\scriptsize Regression validation RMSE; lower is better.}
+    \column{0.49\textwidth}
+      \centering
+      \includegraphics[width=\linewidth,height=0.62\textheight,keepaspectratio]{classification_validation.png}
+      {\scriptsize Classification validation F1; higher is better.}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{SVM diagnostics}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.52\textwidth}
+      \centering
+      \includegraphics[width=\linewidth,height=0.62\textheight,keepaspectratio]{svm_convergence.png}
+      {\scriptsize The stochastic objective decreases overall; local increases are expected.}
+    \column{0.44\textwidth}
+      \centering
+      \includegraphics[width=\linewidth,height=0.62\textheight,keepaspectratio]{svm_feature_weights.png}
+      {\scriptsize Largest positive and negative linear Pegasos weights.}
+  \end{columns}
 \end{frame}
 
 \begin{frame}{Validation results --- regression}
@@ -280,7 +310,7 @@
   \small
   \begin{columns}[T,onlytextwidth]
     \column{0.49\textwidth}
-      \textbf{Mahhamadali Babayev--- Data and Task A}
+      \textbf{Mahammadali Babayev--- Data and Task A}
       \begin{itemize}
         \item Cleaning, preprocessing, feature engineering, and leakage controls.
         \item Scratch Linear/Ridge via normal equations; sklearn regression
@@ -292,7 +322,7 @@
         \item Tree unit tests; Tree HP tuning.
       \end{itemize}
     \column{0.49\textwidth}
-      \textbf{Mahammad Cavadzade --- SVM}
+      \textbf{Mahammad Javadzade --- SVM}
       \begin{itemize}
         \item Scratch Pegasos, objective/margin/support-vector diagnostics.
         \item Nonlinear RFF or kernel extension and feature scaling.
@@ -316,8 +346,8 @@
           training sample.
         \item Large price residuals remain; aggregate metrics hide local and
           category-specific error differences.
-        \item Single held-out split; reported values are not fold-averaged
-        \item         Limited Tuning due to time and reproducibility concerns.
+        \item Single held-out split; reported values are not fold-averaged.
+        \item Limited tuning due to time and reproducibility constraints.
       \end{itemize}
     \column{0.49\textwidth}
       \textbf{Next steps}

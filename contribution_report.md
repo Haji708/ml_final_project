@@ -48,7 +48,7 @@ amounts of debugging and integration.
 
 | Member | Approx. % |
 |--------|-----------|
-| Babayev, Mahhamadali | 30% |
-| Hajiyev, Ilham | 30% |
+| Babayev, Mahhamadali | 25% |
+| Hajiyev, Ilham | 25% |
 | Javadzade, Mahammad | 25% |
-| Isgandarli, Fariz | 15% |
+| Isgandarli, Fariz | 25% |

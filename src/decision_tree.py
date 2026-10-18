@@ -18,16 +18,18 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 import data_prep
+import time
 
 class Node:
     """One node of the tree. Fill in the fields you need."""
     def __init__(self,feature=None,threshold=None,left=None,right=None,value=None):
+        
         self.feature = feature      # int: feature index to split on (internal)
         self.threshold = threshold    # float: split threshold (internal)
         self.left = left         # Node
         self.right = right        # Node
         self.value = value        # leaf prediction (class label/proba or mean)
-
+    
     def is_leaf(self) -> bool:
         return self.left is None and self.right is None
 
@@ -42,7 +44,14 @@ class DecisionTree:
         min_samples_leaf: int = 1,
         min_impurity_decrease: float = 0.0,
         random_state: int = 42,
-    ):
+    ):  
+        if task  not in ["classification" , "regression"]:
+            raise ValueError("Invalid task")
+        if task == 'regression' and criterion!='mse':
+            raise ValueError("Criterion for regression task can only be mse")
+        if task == 'classification' and criterion not in ['gini','entropy']:
+            raise ValueError("Criterion for classification task can only be either gini or entropy")
+        
         self.task = task
         self.criterion = criterion
         self.max_depth = max_depth
@@ -142,6 +151,8 @@ class DecisionTree:
         raise NotImplementedError("TODO: impurity")
 
     def get_optimal_threshold(self, x, y):
+        if(len(x)!=len(y)):
+            raise ValueError("Shape mismatch in feature column 'x' and value column 'y")
         sorted_indices = np.argsort(x)
         x_sorted = x[sorted_indices]
         y_sorted = y[sorted_indices]
@@ -237,6 +248,8 @@ class DecisionTree:
         feat_vals = X[valid_indices, best_col]
         left_indices = valid_indices[np.where(feat_vals<=best_threshold)[0]]
         right_indices = valid_indices[np.where(feat_vals>best_threshold)[0]]
+        if len(left_indices) == 0 or len(right_indices) == 0:
+            return Node(None, None, None, None, self.compute_leaf_value(y[valid_indices]))
 
         left_child = self._grow(X,y,depth+1,left_indices)
         right_child = self._grow(X,y,depth+1,right_indices)
@@ -246,6 +259,8 @@ class DecisionTree:
         raise NotImplementedError("TODO: recursive grow")
 
     def fit(self, X, y):
+        if X.shape[0]!=len(y):
+            raise ValueError("Shape mismatch in data matrix 'X' and value column 'y")
         X = np.asarray(X, dtype=float)
         y = np.asarray(y)
         self.classes_ = np.unique(y)
@@ -268,6 +283,8 @@ class DecisionTree:
         raise NotImplementedError("TODO: predict")
 
     def predict_proba_one(self, x,node:Node):
+        if self.task == 'regression':
+            raise ValueError("predict_proba is not supported for regression tasks.")
         """Classification only: return class probabilities from leaf counts."""
         if node.is_leaf():
             return node.value[0]
@@ -278,9 +295,41 @@ class DecisionTree:
         
         
     def predict_proba(self, X):
+        if self.task == 'regression':
+            raise ValueError("predict_proba is not supported for regression tasks.")
         """Classification only: return class probabilities from leaf counts."""
         return np.array([self.predict_proba_one(row,self.root) for row in X])
         raise NotImplementedError("TODO: predict_proba (classification)")
+    def compute_feature_importances(self, X, y):
+        importances = np.zeros(X.shape[1], dtype=float)
+        n_samples = len(y)
+
+        def visit(node, indices):
+            if node.is_leaf():
+                return
+
+            left_mask = X[indices, node.feature] <= node.threshold
+            left_indices = indices[left_mask]
+            right_indices = indices[~left_mask]
+
+            parent_impurity = self._impurity(y[indices])
+            child_impurity = (
+                len(left_indices) / len(indices) * self._impurity(y[left_indices])
+                + len(right_indices) / len(indices) * self._impurity(y[right_indices])
+            )
+            decrease = max(0.0, parent_impurity - child_impurity)
+            importances[node.feature] += len(indices) / n_samples * decrease
+
+            visit(node.left, left_indices)
+            visit(node.right, right_indices)
+
+        visit(self.root, np.arange(n_samples))
+
+        total = importances.sum()
+        if total > 0:
+            importances /= total
+
+        self.feature_importances_ = importances
 
 
 
@@ -290,14 +339,19 @@ X = prepared["X_train"]
 y = prepared["y_train"]
 X_test =prepared["X_test"]
 y_test =prepared["y_test"]
+start_time = time.perf_counter()
 tree = DecisionTree(task='regression',criterion='mse',max_depth=10)
 tree.fit(X,y)
+end_time = time.perf_counter()
+elapsed_time = end_time - start_time
+print(f"Elapsed time: {elapsed_time:.6f} seconds")
 y_pred=tree.predict(X_test)
+
 print('_______________')
 mae = (sum(abs(y_pred[i]-y_test[i]) for i in range(len(y_pred)))/len(y_test))
 baseline_mae = np.mean(np.abs(y_test - np.median(y)))
 print("Model MAE:", mae)
 print("Median-baseline MAE:", baseline_mae)
-print("Test median price:", np.median(y_test))
-#print(tree.predict_proba(X))
+print("Test median price:", np.median(y_test)
 """
+# depth =15 ,  23s ; depth =5 ,7s ; depth = 10 ,13s

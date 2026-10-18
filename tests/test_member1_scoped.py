@@ -19,7 +19,7 @@ from src.linear_regression import LinearRegressionNormalEquation, RidgeRegressio
 from src import member1_metrics as metrics
 from src.member1_regression import (
     _diagnostic_cv, _validation_search, linear_feature_matrix,
-    run_member1_experiments, run_member1_pipeline,
+    run_member1_experiments, run_member1_pipeline, validation_error_tables,
 )
 
 
@@ -246,6 +246,20 @@ class ModelAndMetricTests(unittest.TestCase):
         np.testing.assert_array_equal(original, [[200, 0, 100, 1]])
         np.testing.assert_allclose(logged, [[np.log1p(200), 0, np.log1p(100), 1]])
 
+    def test_interactions_fit_different_area_slopes_by_property_type(self):
+        area = np.tile(np.linspace(10, 100, 20), 2)
+        category = np.repeat([0, 1], 20)
+        X = np.column_stack([area, category == 0, category == 1])
+        names = ["Sahə_m2", "Kateqoriya=Apartment", "Kateqoriya=Land"]
+        y = 50_000 + area * np.where(category == 0, 2_000, 100)
+        before = X.copy()
+        transformed = linear_feature_matrix(X, names, "raw_interactions")
+        model = LinearRegressionNormalEquation().fit(transformed, y)
+        unseen = np.array([[55, 1, 0], [55, 0, 1]])
+        prediction = model.predict(linear_feature_matrix(unseen, names, "raw_interactions"))
+        np.testing.assert_allclose(prediction, [160_000, 55_500], atol=1e-6)
+        np.testing.assert_array_equal(X, before)
+
 
 class ExperimentTests(unittest.TestCase):
     def setUp(self):
@@ -263,7 +277,7 @@ class ExperimentTests(unittest.TestCase):
                                  if key not in ("X_test", "X_test_scaled", "y_test", "y_tier_test", "test_frame")}
         choices, trials, _ = _validation_search(train_validation_only, True)
         self.assertEqual(set(choices), {"Linear", "Ridge", "Tree"})
-        self.assertEqual(len(trials), 30)
+        self.assertEqual(len(trials), 70)
 
     def test_cv_refits_preprocessing_for_every_fold(self):
         seen = []
@@ -287,7 +301,7 @@ class ExperimentTests(unittest.TestCase):
             np.testing.assert_array_equal(self.prepared[name], expected)
         self.assertEqual(json.dumps(self.prepared["metadata"], sort_keys=True), metadata_before)
         self.assertEqual({path.name for path in output.iterdir()}, {
-            "metadata.json", "test_metrics.csv", "validation_trials.csv", "cv_folds.csv", "cv_summary.csv"})
+            "metadata.json", "test_metrics.csv", "cv_summary.csv", "validation_metrics.csv"})
         self.assertEqual(len(result["test_metrics"]), 6)
         metadata = json.loads((output / "metadata.json").read_text(encoding="utf-8"))
         self.assertNotIn("split_row_ids", metadata)
@@ -295,6 +309,34 @@ class ExperimentTests(unittest.TestCase):
         self.assertIn("Tree", metadata["selected_configs"])
         self.assertTrue(all(value < 1e-4 for value in result["prediction_differences"].values()))
         self.assertEqual(pd.read_csv(output / "cv_summary.csv").shape[0], 0)
+
+    def test_validation_diagnostics_keep_original_row_identity(self):
+        truth = self.prepared["y_validation"]
+        prediction = truth.copy()
+        prediction[2] += 10_000
+        prediction[0] += 100
+        errors, worst, categories = validation_error_tables(
+            self.prepared, {"Custom Ridge": prediction}, top_n=2)
+        self.assertEqual(len(errors), len(truth))
+        self.assertEqual(worst["source_row_id"].tolist(),
+                         self.prepared["validation_frame"]["source_row_id"].iloc[[2, 0]].tolist())
+        np.testing.assert_allclose(worst["absolute_error_AZN"], [10_000, 100])
+        self.assertEqual(categories["rows"].sum(), len(truth))
+        self.assertTrue(set(errors.source_row_id).isdisjoint(self.prepared["test_frame"].source_row_id))
+
+    def test_log_target_predictions_are_reported_in_azn(self):
+        frame = raw_fixture()
+        area = frame["Sahə"].map(data_prep._extract_number).to_numpy()
+        frame["price"] = np.expm1(8 + 0.015 * area)
+        frame.to_csv(self.csv, index=False)
+        prepared = data_prep.prepare_data(self.csv)
+        with patch("builtins.print"):
+            result = run_member1_experiments(prepared, self.root / "logged", cv_folds=0,
+                                             include_tree_baseline=False)
+        self.assertEqual(result["selections"]["Linear"]["target_mode"], "log_price")
+        np.testing.assert_allclose(result["test_predictions"]["Custom Linear"],
+                                   prepared["y_test"], rtol=1e-9)
+        self.assertGreater(result["validation_results"]["Custom Linear"]["R2"], 0.999999)
 
     def test_compatibility_wrapper_preserves_previous_returned_keys(self):
         with patch.object(data_prep, "prepare_data", return_value=self.prepared) as preparing:

@@ -5,47 +5,49 @@ Run from the repo root:
     python -m src.run_all
 
 This orchestrator:
-  1. Loads and cleans the bina.az dataset with zero target/test leakage,
+  1. Loads and cleans the bina.az dataset with training-fitted preprocessing,
   2. Builds features, stratified splits, and standardized matrices,
-  3. Trains Task A regression models (from-scratch Ridge, sklearn Ridge, DecisionTreeRegressor),
+  3. Selects Linear/Ridge features, targets and alpha on validation; trains a tree baseline,
   4. Trains Task B classification models (from-scratch PegasosSVM, sklearn SGDClassifier, LinearSVC, DecisionTreeClassifier),
   5. Evaluates all models using our from-scratch src.evaluate suite,
   6. Generates error analysis and model interpretation figures into report/figures/,
-  7. Prints comprehensive comparison tables and saves results to report/summary_table.csv.
+  7. Saves validation/test tables, selected settings, and validation error diagnostics.
 
-All runs are seeded (SEED = 42) for 100% deterministic reproducibility.
+Randomized operations use the requested seed (default 42).
 """
 
 from __future__ import annotations
 
-import os
+import argparse
+import json
 import sys
 import time
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from . import data_prep
-from . import evaluate
-from .linear_regression import RidgeRegressionNormalEquation
-from .svm import PegasosSVM
+# Support both `python -m src.run_all` and `python src/run_all.py`.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src import data_prep, evaluate, member1_regression
+from src.svm import PegasosSVM
 
 # Optional from-scratch decision tree
 try:
-    from .decision_tree import DecisionTree
+    from src.decision_tree import DecisionTree
 except ImportError:
     DecisionTree = None
 
-from sklearn.linear_model import Ridge, SGDClassifier
+from sklearn.linear_model import SGDClassifier
 from sklearn.svm import LinearSVC
-from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
+from sklearn.tree import DecisionTreeClassifier
 
-
-FIG_DIR = Path("report/figures")
-REPORT_DIR = Path("report")
+REPORT_DIR = data_prep.PROJECT_ROOT / "report"
+FIG_DIR = REPORT_DIR / "figures"
 
 
 def plot_svm_weights(feature_names: list[str], weights: np.ndarray, save_path: Path) -> None:
@@ -83,19 +85,70 @@ def plot_tree_feature_importances(feature_names: list[str], importances: np.ndar
     plt.barh(y_pos, top_imps, color="#3498db", edgecolor="black", alpha=0.85)
     plt.yticks(y_pos, top_names, fontsize=9)
     plt.xlabel("MDI Feature Importance", fontsize=11)
-    plt.title("Top 15 Feature Importances — DecisionTree", fontsize=12, fontweight="bold")
+    plt.title("Top 15 Feature Importances — scratch DecisionTree", fontsize=12, fontweight="bold")
     plt.grid(axis="x", linestyle=":", alpha=0.6)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
     plt.close()
 
 
+def plot_tree_validation_curves(
+        regression_trials: pd.DataFrame,
+        classification_trials: pd.DataFrame,
+        save_path: Path,
+) -> None:
+    """Plot scratch-tree training and validation scores across depth settings."""
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    for leaf_size, trials in regression_trials.groupby("min_samples_leaf"):
+        trials = trials.sort_values("max_depth")
+        axes[0].plot(
+            trials["max_depth"], trials["training_mae"],
+            marker="o", linestyle="--", label=f"leaf={leaf_size} train",
+        )
+        axes[0].plot(
+            trials["max_depth"], trials["validation_mae"],
+            marker="o", label=f"leaf={leaf_size} validation",
+        )
+    axes[0].set_title("Scratch Regression Tree")
+    axes[0].set_ylabel("MAE (AZN)")
+    axes[0].set_xlabel("Maximum depth")
+    axes[0].legend(fontsize=8)
+
+    for axis, criterion in zip(axes[1:], ("gini", "entropy")):
+        criterion_trials = classification_trials[
+            classification_trials["criterion"] == criterion
+            ]
+        for leaf_size, trials in criterion_trials.groupby("min_samples_leaf"):
+            trials = trials.sort_values("max_depth")
+            axis.plot(
+                trials["max_depth"], trials["training_f1"],
+                marker="o", linestyle="--", label=f"leaf={leaf_size} train",
+            )
+            axis.plot(
+                trials["max_depth"], trials["validation_f1"],
+                marker="o", label=f"leaf={leaf_size} validation",
+            )
+        axis.set_title(f"Scratch Classification Tree ({criterion})")
+        axis.set_xlabel("Maximum depth")
+        axis.legend(fontsize=8)
+
+    for axis in axes:
+        axis.set_xticks(sorted(regression_trials["max_depth"].unique()))
+        axis.grid(True, linestyle=":", alpha=0.6)
+    axes[1].set_ylabel("F1 score")
+    axes[2].set_ylabel("F1 score")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=300)
+    plt.close(fig)
+
+
 def plot_error_analysis(
-    y_true_reg: np.ndarray,
-    y_pred_reg: np.ndarray,
-    y_true_clf: np.ndarray,
-    y_pred_clf: np.ndarray,
-    save_path: Path,
+        y_true_reg: np.ndarray,
+        y_pred_reg: np.ndarray,
+        y_true_clf: np.ndarray,
+        y_pred_clf: np.ndarray,
+        save_path: Path,
 ) -> None:
     """Generate diagnostic error plots for regression residuals and classification errors."""
     fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
@@ -138,91 +191,102 @@ def plot_error_analysis(
     plt.savefig(save_path, dpi=300)
     plt.close()
 
+
 def select_svm_config(
-    X_train,
-    y_train,
-    X_validation,
-    y_validation,
+        X_train, y_train, X_validation, y_validation, *,
+        iteration_budgets=(50_000, 200_000, 500_000),
+        component_counts=(250, 500),
+        gammas=(0.001, 0.005, 0.01, 0.05, 0.5, 1.0, 2.0),
+        random_state=42, verbose=False,
 ):
-    """Select SVM hyperparameters using validation F1 only."""
-    candidates = [
-        {
-            "feature_map": "linear",
-            "lambda_": 1e-5,
-            "n_components": 500,
-            "gamma": 1.0,
-        },
-        {
-            "feature_map": "linear",
-            "lambda_": 1e-4,
-            "n_components": 500,
-            "gamma": 1.0,
-        },
-        {
-            "feature_map": "linear",
-            "lambda_": 1e-3,
-            "n_components": 500,
-            "gamma": 1.0,
-        },
-        {
-            "feature_map": "rff",
-            "lambda_": 1e-4,
-            "n_components": 250,
-            "gamma": 0.5,
-        },
-        {
-            "feature_map": "rff",
-            "lambda_": 1e-4,
-            "n_components": 500,
-            "gamma": 1.0,
-        },
-        {
-            "feature_map": "rff",
-            "lambda_": 1e-4,
-            "n_components": 500,
-            "gamma": 2.0,
-        },
-    ]
+    """Coarse search, then refine each family's winner using validation only.
 
-    trials = []
+    Budgets count single-example updates, not epochs. Keep the short-budget
+    candidates in the final comparison so longer training must earn its place.
+    RFF width is expanded only after choosing a promising gamma/lambda pair.
+    """
+    budgets = sorted(set(int(value) for value in iteration_budgets))
+    components = sorted(set(int(value) for value in component_counts))
+    if not budgets or budgets[0] <= 0 or not components or components[0] <= 0:
+        raise ValueError("SVM iteration budgets and component counts must be positive")
+    if not gammas or any(not np.isfinite(value) or value <= 0 for value in gammas):
+        raise ValueError("SVM gammas must be finite and positive")
+    trials, seen = [], set()
 
-    for config in candidates:
-        model = PegasosSVM(
-            lambda_=config["lambda_"],
-            n_iters=50_000,
-            random_state=42,
-            feature_map=config["feature_map"],
-            n_components=config["n_components"],
-            gamma=config["gamma"],
-        )
+    def train_candidate(config, phase):
+        key = tuple(config[name] for name in
+                    ("feature_map", "lambda_", "gamma", "n_components", "n_iters"))
+        if key in seen:
+            return
+        seen.add(key)
+        started = time.perf_counter()
+        model = PegasosSVM(**config, random_state=random_state,
+                           record_every=max(1, config["n_iters"] // 10))
         model.fit(X_train, y_train)
-
-        predictions = model.predict(X_validation)
+        prediction = model.predict(X_validation)
         scores = model.decision_function(X_validation)
+        precision, recall, f1 = evaluate.precision_recall_f1(y_validation, prediction)
+        trials.append({**config, "phase": phase,
+                       "Precision": precision, "Recall": recall, "F1": f1,
+                       "AUC": evaluate.roc_auc(y_validation, scores),
+                       "updates_per_training_row": config["n_iters"] / len(X_train),
+                       "initial_objective": model.objective_history_[0],
+                       "final_objective": model.objective_history_[-1],
+                       "fit_and_validation_seconds": time.perf_counter() - started})
+        if verbose:
+            print(f"     {config['feature_map']}: lambda={config['lambda_']:g}, "
+                  f"gamma={config['gamma']:g}, components={config['n_components']}, "
+                  f"updates={config['n_iters']:,}, validation F1={f1:.4f}", flush=True)
 
-        precision, recall, f1 = evaluate.precision_recall_f1(
-            y_validation,
-            predictions,
-        )
-        auc = evaluate.roc_auc(y_validation, scores)
+    for regularization in (1e-5, 1e-4, 1e-3):
+        train_candidate({"feature_map": "linear", "lambda_": regularization,
+                         "gamma": 1.0, "n_components": components[0],
+                         "n_iters": budgets[0]}, "coarse")
+    for gamma in gammas:
+        for regularization in (1e-4, 1e-3):
+            train_candidate({"feature_map": "rff", "lambda_": regularization,
+                             "gamma": float(gamma), "n_components": components[0],
+                             "n_iters": budgets[0]}, "coarse")
 
-        trials.append({
-            **config,
-            "Precision": precision,
-            "Recall": recall,
-            "F1": f1,
-            "AUC": auc,
-        })
-
+    for feature_map in ("linear", "rff"):
+        table = pd.DataFrame(trials)
+        winner = table[table["feature_map"] == feature_map].sort_values(
+            ["F1", "AUC"], ascending=False, kind="stable").iloc[0]
+        widths = components if feature_map == "rff" else components[:1]
+        for width in widths:
+            for budget in budgets:
+                train_candidate({"feature_map": feature_map,
+                                 "lambda_": float(winner["lambda_"]),
+                                 "gamma": float(winner["gamma"]),
+                                 "n_components": width, "n_iters": budget}, "refine")
     trials_df = pd.DataFrame(trials)
     best_config = trials_df.sort_values(
-        ["F1", "AUC"],
-        ascending=False,
-    ).iloc[0].to_dict()
-
+        ["F1", "AUC"], ascending=False, kind="stable").iloc[0].to_dict()
     return best_config, trials_df
 
-def main() -> None:
+
+def svm_from_trial(trial, seed):
+    """Reproduce the exact validation-selected training configuration."""
+    updates = int(trial["n_iters"])
+    return PegasosSVM(lambda_=float(trial["lambda_"]), n_iters=updates,
+                      random_state=seed, feature_map=str(trial["feature_map"]),
+                      n_components=int(trial["n_components"]), gamma=float(trial["gamma"]),
+                      record_every=max(1, updates // 10))
+
+
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(description="Run the shared validation-selected benchmark")
+    parser.add_argument("--data", default=None, help="Path to bina_az_sale.csv")
+    parser.add_argument("--output", type=Path, default=data_prep.PROJECT_ROOT / "report")
+    parser.add_argument("--cv-folds", type=int, default=5)
+    parser.add_argument("--seed", type=int, default=data_prep.SEED)
+    parser.add_argument("--svm-iterations", type=int, nargs="+", default=[50_000, 200_000, 500_000],
+                        help="Candidate numbers of single-example SVM updates")
+    parser.add_argument("--svm-components", type=int, nargs="+", default=[250, 500])
+    args = parser.parse_args(argv)
+    global REPORT_DIR, FIG_DIR
+    REPORT_DIR = args.output.resolve()
+    FIG_DIR = REPORT_DIR / "figures"
     print("=" * 80)
     print("  MLE-AI-201 FINAL PROJECT: REPRODUCIBLE BENCHMARK PIPELINE")
     print("=" * 80)
@@ -235,7 +299,7 @@ def main() -> None:
     # -------------------------------------------------------------------------
     print("\n[Step 1/4] Preparing data pipeline (clean, encode, stratify, scale)...")
     t0 = time.time()
-    bundle = data_prep.prepare_data(seed=42)
+    bundle = data_prep.prepare_data(args.data, seed=args.seed)
     prep_time = time.time() - t0
 
     X_train = bundle["X_train"]
@@ -264,94 +328,109 @@ def main() -> None:
 
     val_results: dict[str, dict[str, float]] = {}
     test_results: dict[str, dict[str, float]] = {}
+    scratch_tree_configs = {}
 
     # -------------------------------------------------------------------------
     # 2. Task A: Regression (Price Prediction)
     # -------------------------------------------------------------------------
     print("\n[Step 2/4] Training and evaluating Task A regression models...")
 
-    # Model A1: Normal Equation Ridge Regression (From Scratch)
-    print("  -> Training From-Scratch Ridge Regression (Normal Equation, alpha=10.0)...")
-    t_start = time.time()
-    ridge_scratch = RidgeRegressionNormalEquation(alpha=10.0)
-    ridge_scratch.fit(X_train_sc, y_train)
-    t_fit_ridge_sc = time.time() - t_start
-    preds_val_r_sc = ridge_scratch.predict(X_val_sc)
-    preds_test_r_sc = ridge_scratch.predict(X_test_sc)
-
-    val_results["Ridge (Scratch)"] = {
-        "RMSE": evaluate.rmse(y_val, preds_val_r_sc),
-        "MAE": evaluate.mae(y_val, preds_val_r_sc),
-        "R2": evaluate.r2(y_val, preds_val_r_sc),
+    regression = member1_regression.run_member1_experiments(
+        bundle, REPORT_DIR / "member1_checked", cv_folds=args.cv_folds,
+        include_tree_baseline=True,
+    )
+    regression_names = {
+        "Custom Linear": "Linear (Scratch)", "sklearn Linear": "Linear (sklearn)",
+        "Custom Ridge": "Ridge (Scratch)", "sklearn Ridge": "Ridge (sklearn)",
+        "sklearn DecisionTreeRegressor": "DecisionTree Reg (sklearn)",
+        "Training median": "Training median",
     }
-    test_results["Ridge (Scratch)"] = {
-        "RMSE": evaluate.rmse(y_test, preds_test_r_sc),
-        "MAE": evaluate.mae(y_test, preds_test_r_sc),
-        "R2": evaluate.r2(y_test, preds_test_r_sc),
-    }
-    print(f"     Val R2: {val_results['Ridge (Scratch)']['R2']:.4f} (fit: {t_fit_ridge_sc:.2f}s)")
-
-    # Model A2: Scikit-learn Ridge Baseline
-    print("  -> Training scikit-learn Ridge Baseline (alpha=10.0)...")
-    t_start = time.time()
-    ridge_sk = Ridge(alpha=10.0, random_state=42)
-    ridge_sk.fit(X_train_sc, y_train)
-    t_fit_ridge_sk = time.time() - t_start
-    preds_val_r_sk = ridge_sk.predict(X_val_sc)
-    preds_test_r_sk = ridge_sk.predict(X_test_sc)
-
-    val_results["Ridge (sklearn)"] = {
-        "RMSE": evaluate.rmse(y_val, preds_val_r_sk),
-        "MAE": evaluate.mae(y_val, preds_val_r_sk),
-        "R2": evaluate.r2(y_val, preds_val_r_sk),
-    }
-    test_results["Ridge (sklearn)"] = {
-        "RMSE": evaluate.rmse(y_test, preds_test_r_sk),
-        "MAE": evaluate.mae(y_test, preds_test_r_sk),
-        "R2": evaluate.r2(y_test, preds_test_r_sk),
-    }
-    print(f"     Val R2: {val_results['Ridge (sklearn)']['R2']:.4f} (fit: {t_fit_ridge_sk:.2f}s)")
-
-    # Model A3: Scikit-learn DecisionTreeRegressor Baseline
-    print("  -> Training scikit-learn DecisionTreeRegressor Baseline (max_depth=12)...")
-    t_start = time.time()
-    dt_reg = DecisionTreeRegressor(max_depth=12, min_samples_leaf=5, random_state=42)
-    dt_reg.fit(X_train, y_train)
-    t_fit_dt_reg = time.time() - t_start
-    preds_val_dt_reg = dt_reg.predict(X_val)
-    preds_test_dt_reg = dt_reg.predict(X_test)
-
-    val_results["DecisionTree Reg (sklearn)"] = {
-        "RMSE": evaluate.rmse(y_val, preds_val_dt_reg),
-        "MAE": evaluate.mae(y_val, preds_val_dt_reg),
-        "R2": evaluate.r2(y_val, preds_val_dt_reg),
-    }
-    test_results["DecisionTree Reg (sklearn)"] = {
-        "RMSE": evaluate.rmse(y_test, preds_test_dt_reg),
-        "MAE": evaluate.mae(y_test, preds_test_dt_reg),
-        "R2": evaluate.r2(y_test, preds_test_dt_reg),
-    }
-    print(f"     Val R2: {val_results['DecisionTree Reg (sklearn)']['R2']:.4f} (fit: {t_fit_dt_reg:.2f}s)")
+    for source_name, display_name in regression_names.items():
+        val_results[display_name] = regression["validation_results"][source_name]
+        test_results[display_name] = regression["regression_results"][source_name]
+    preds_val_dt_reg = regression["validation_predictions"]["sklearn DecisionTreeRegressor"]
 
     # Model A4: From-scratch DecisionTree (if implemented)
     if DecisionTree is not None:
-        try:
-            tree_reg = DecisionTree(task="regression", criterion="mse", max_depth=10, random_state=42)
-            tree_reg.fit(X_train, y_train)
-            p_val = tree_reg.predict(X_val)
-            p_test = tree_reg.predict(X_test)
-            val_results["DecisionTree Reg (Scratch)"] = {
-                "RMSE": evaluate.rmse(y_val, p_val),
-                "MAE": evaluate.mae(y_val, p_val),
-                "R2": evaluate.r2(y_val, p_val),
-            }
-            test_results["DecisionTree Reg (Scratch)"] = {
-                "RMSE": evaluate.rmse(y_test, p_test),
-                "MAE": evaluate.mae(y_test, p_test),
-                "R2": evaluate.r2(y_test, p_test),
-            }
-        except (NotImplementedError, Exception):
-            pass
+        t_start_tree = time.time()
+        print("Tuning Scratch Regression Decision Tree ")
+        # candidate_depths = [4, 6, 10, 12,16]
+        # candidate_leaf_sizes = [1, 5, 10, 20,30]
+        # candidate_split_sizes = [2, 10, 12,15,20]
+        candidate_depths = [5, 10, 15]
+        candidate_leaf_sizes = [1, 5, 10]
+
+        best_val_score = float("inf")
+        best_depth, best_leaf_size = (0, 0)
+        best_tree = None
+        test_result_scratch_des_tree = {}
+        val_result_scratch_des_tree = {}
+        regression_tree_trials = []
+        for candidate_depth in candidate_depths:
+            for candidate_leaf_size in candidate_leaf_sizes:
+
+                tree_reg = DecisionTree(task="regression",
+                                        criterion="mse", max_depth=candidate_depth,
+                                        random_state=args.seed,
+                                        min_samples_leaf=candidate_leaf_size,
+
+                                        )
+                tree_reg.fit(X_train, y_train)
+                p_train = tree_reg.predict(X_train)
+                p_val = tree_reg.predict(X_val)
+                mae = evaluate.mae(y_val, p_val)
+                regression_tree_trials.append({
+                    "max_depth": candidate_depth,
+                    "min_samples_leaf": candidate_leaf_size,
+                    "training_mae": evaluate.mae(y_train, p_train),
+                    "validation_mae": mae,
+                })
+
+                if mae < best_val_score:
+                    best_val_score = mae
+                    best_depth, best_leaf_size = candidate_depth, candidate_leaf_size
+                    best_tree = tree_reg
+                    val_result_scratch_des_tree = {
+                        "RMSE": evaluate.rmse(y_val, p_val),
+                        "MAE": evaluate.mae(y_val, p_val),
+                        "R2": evaluate.r2(y_val, p_val),
+                    }
+
+        if best_tree is None:
+            raise RuntimeError("No decision-tree configuration was selected")
+        scratch_tree_configs["scratch_tree_regression"] = {
+            "task": "regression",
+            "criterion": "mse",
+            "max_depth": best_depth,
+            "min_samples_leaf": best_leaf_size,
+            "random_state": args.seed,
+        }
+        t_end_tree = time.time()
+        print(f"Tuning Regression Tree took {t_end_tree - t_start_tree:.6f} seconds")
+
+        val_results["DecisionTree Reg (Scratch)"] = val_result_scratch_des_tree
+        print(
+            f"min_samples_leaf={best_leaf_size}, "
+            f"validation MAE={best_val_score:.2f}"
+        )
+
+        p_test = best_tree.predict(X_test)
+
+        test_result_scratch_des_tree = {
+            "RMSE": evaluate.rmse(y_test, p_test),
+            "MAE": evaluate.mae(y_test, p_test),
+            "R2": evaluate.r2(y_test, p_test),
+        }
+
+        test_results["DecisionTree Reg (Scratch)"] = test_result_scratch_des_tree
+        best_tree.compute_feature_importances(X_train,y_train)
+        plot_tree_feature_importances(
+            feat_names,
+            best_tree.feature_importances_,
+            FIG_DIR / "tree_regression_feature_importances.png",
+        )
+    else:
+        regression_tree_trials = pd.DataFrame()
 
     # -------------------------------------------------------------------------
     # 3. Task B: Classification (Price Tier)
@@ -365,39 +444,131 @@ def main() -> None:
         y_tier_tr,
         X_val_sc,
         y_tier_val,
+        iteration_budgets=args.svm_iterations, component_counts=args.svm_components,
+        random_state=args.seed, verbose=True,
     )
-
-    svm_trials.to_csv(
-        REPORT_DIR / "svm_validation_trials.csv",
-        index=False,
-    )
+    selected_linear = svm_trials[svm_trials["feature_map"] == "linear"].sort_values(
+        ["F1", "AUC"], ascending=False, kind="stable").iloc[0].to_dict()
+    selected_rff = svm_trials[svm_trials["feature_map"] == "rff"].sort_values(
+        ["F1", "AUC"], ascending=False, kind="stable").iloc[0].to_dict()
 
     print(
         "     Selected:",
         {
             key: best_svm_config[key]
             for key in (
-                "feature_map",
-                "lambda_",
-                "gamma",
-                "n_components",
-            )
+            "feature_map",
+            "lambda_",
+            "gamma",
+            "n_components",
+        )
         },
         f"with validation F1={best_svm_config['F1']:.4f}",
     )
+    # Model B0: Decision Tree with tuned HyperParams
+    if DecisionTree is not None:
+        print("Tuning Scratch Decision Tree Classifier")
+        t_start_tree = time.time()
+        # candidate_depths = [4, 6, 10, 12,16]
+        # candidate_leaf_sizes = [1, 5, 10, 20,30]
+        # candidate_split_sizes = [2, 10, 12,15,20]
+        candidate_depths = [5, 10, 15]
+        candidate_leaf_sizes = [1, 5, 10]
 
-    # Model B1: validation-selected From-Scratch Pegasos Soft-Margin SVM
-    print("  -> Training validation-selected From-Scratch Pegasos SVM...")
+        best_val_score = float("-inf")
+        best_depth, best_leaf_size = (0, 0)
+        best_tree = None
+        test_result_scratch_tree = {}
+        val_result_scratch_des_tree = {}
+        classification_tree_trials = []
+        for criterion in ["gini", 'entropy']:
+            for candidate_depth in candidate_depths:
+                for candidate_leaf_size in candidate_leaf_sizes:
+
+                    tree_clf = DecisionTree(task="classification",
+                                            criterion=criterion, max_depth=candidate_depth,
+                                            random_state=args.seed,
+                                            min_samples_leaf=candidate_leaf_size,
+
+                                            )
+                    tree_clf.fit(X_train, y_tier_tr)
+                    p_train = tree_clf.predict(X_train)
+                    p_val = tree_clf.predict(X_val)
+                    scores_val = tree_clf.predict_proba(X_val)[:, 1]
+
+                    _, _, training_f1 = evaluate.precision_recall_f1(
+                        y_tier_tr,
+                        p_train,
+                    )
+                    precision, recall, f1 = evaluate.precision_recall_f1(y_tier_val, p_val)
+                    auc = evaluate.roc_auc(y_tier_val, scores_val)
+                    classification_tree_trials.append({
+                        "criterion": criterion,
+                        "max_depth": candidate_depth,
+                        "min_samples_leaf": candidate_leaf_size,
+                        "training_f1": training_f1,
+                        "validation_f1": f1,
+                    })
+
+                    if f1 > best_val_score:
+                        best_val_score = f1
+                        best_depth = candidate_depth
+                        best_leaf_size = candidate_leaf_size
+                        best_criterion = criterion
+                        best_tree = tree_clf
+                        val_result_scratch_tree = {
+                            "Precision": precision,
+                            "Recall": recall,
+                            "F1": f1,
+                            "AUC": auc,
+                        }
+
+        if best_tree is None:
+            raise RuntimeError("No decision-tree configuration was selected")
+        scratch_tree_configs["scratch_tree_classification"] = {
+            "task": "classification",
+            "criterion": best_criterion,
+            "max_depth": best_depth,
+            "min_samples_leaf": best_leaf_size,
+            "random_state": args.seed,
+        }
+        t_end_tree = time.time()
+        print(f"Tuning Classification Tree took {t_end_tree - t_start_tree:.6f} seconds")
+        val_results["DecisionTree Classifier (Scratch)"] = val_result_scratch_tree
+        print(
+            f"Selected scratch tree: criterion={best_criterion}, depth={best_depth}, "
+            f"min_samples_leaf={best_leaf_size}, "
+            f"validation F1={best_val_score:.2f}"
+        )
+
+        scores_test = best_tree.predict_proba(X_test)[:, 1]
+        p_test = best_tree.predict(X_test)
+
+        precision, recall, f1 = evaluate.precision_recall_f1(y_tier_test, p_test)
+        auc = evaluate.roc_auc(y_tier_test, scores_test)
+
+        test_result_scratch_tree = {
+            "Precision": precision,
+            "Recall": recall,
+            "F1": f1,
+            "AUC": auc,
+        }
+
+        test_results["DecisionTree Classifier (Scratch)"] = test_result_scratch_tree
+        best_tree.compute_feature_importances(X_train,y_tier_tr)
+        plot_tree_feature_importances(
+            feat_names,
+            best_tree.feature_importances_,
+            FIG_DIR / "tree_classification_feature_importances.png",
+        )
+        
+    else:
+        classification_tree_trials = pd.DataFrame()
+
+    # Report separately tuned linear and nonlinear SVMs under clear labels.
+    print("  -> Training validation-selected linear Pegasos SVM...")
     t_start = time.time()
-    pegasos_svm = PegasosSVM(
-        lambda_=float(best_svm_config["lambda_"]),
-        n_iters=50_000,
-        random_state=42,
-        feature_map=str(best_svm_config["feature_map"]),
-        n_components=int(best_svm_config["n_components"]),
-        gamma=float(best_svm_config["gamma"]),
-        record_every=100,
-    )
+    pegasos_svm = svm_from_trial(selected_linear, args.seed)
     pegasos_svm.fit(X_train_sc, y_tier_tr)
     t_fit_svm = time.time() - t_start
 
@@ -419,15 +590,7 @@ def main() -> None:
     print("  -> Training From-Scratch Pegasos SVM with RFF...")
     t_start = time.time()
 
-    pegasos_rff = PegasosSVM(
-        lambda_=1e-4,
-        n_iters=50_000,
-        random_state=42,
-        feature_map="rff",
-        n_components=500,
-        gamma=1.0,
-        record_every=100,
-    )
+    pegasos_rff = svm_from_trial(selected_rff, args.seed)
     pegasos_rff.fit(X_train_sc, y_tier_tr)
 
     t_fit_rff = time.time() - t_start
@@ -475,7 +638,7 @@ def main() -> None:
     # Model B2: Scikit-learn SGDClassifier (hinge loss baseline)
     print("  -> Training scikit-learn SGDClassifier (hinge loss baseline)...")
     t_start = time.time()
-    sgd_clf = SGDClassifier(loss="hinge", alpha=1e-4, random_state=42)
+    sgd_clf = SGDClassifier(loss="hinge", alpha=1e-4, random_state=args.seed)
     sgd_clf.fit(X_train_sc, y_tier_tr)
     t_fit_sgd = time.time() - t_start
 
@@ -496,7 +659,7 @@ def main() -> None:
     # Model B3: Scikit-learn LinearSVC Baseline
     print("  -> Training scikit-learn LinearSVC Baseline (C=1.0)...")
     t_start = time.time()
-    lsvc = LinearSVC(C=1.0, random_state=42, max_iter=2000)
+    lsvc = LinearSVC(C=1.0, random_state=args.seed, max_iter=2000)
     lsvc.fit(X_train_sc, y_tier_tr)
     t_fit_lsvc = time.time() - t_start
 
@@ -517,7 +680,7 @@ def main() -> None:
     # Model B4: Scikit-learn DecisionTreeClassifier Baseline
     print("  -> Training scikit-learn DecisionTreeClassifier Baseline (max_depth=12)...")
     t_start = time.time()
-    dt_clf = DecisionTreeClassifier(max_depth=12, min_samples_leaf=5, random_state=42)
+    dt_clf = DecisionTreeClassifier(max_depth=12, min_samples_leaf=5, random_state=args.seed)
     dt_clf.fit(X_train, y_tier_tr)
     t_fit_dt_clf = time.time() - t_start
 
@@ -540,6 +703,15 @@ def main() -> None:
     # -------------------------------------------------------------------------
     print("\n[Step 4/4] Generating error analysis figures and comparison reports...")
 
+    regression_tree_trials = pd.DataFrame(regression_tree_trials)
+    classification_tree_trials = pd.DataFrame(classification_tree_trials)
+    if not regression_tree_trials.empty and not classification_tree_trials.empty:
+        plot_tree_validation_curves(
+            regression_tree_trials,
+            classification_tree_trials,
+            FIG_DIR / "tree_validation_curves.png",
+        )
+
     if pegasos_svm.feature_map == "linear":
         plot_svm_weights(
             feat_names,
@@ -557,55 +729,18 @@ def main() -> None:
         FIG_DIR / "error_analysis.png",
     )
     print("  ✓ Saved figures to report/figures/:")
-    print("     - svm_feature_weights.png")
+    if pegasos_svm.feature_map == "linear":
+        print("     - svm_feature_weights.png")
     print("     - tree_feature_importances.png")
+    print("     - tree_validation_curves.png")
     print("     - error_analysis.png")
 
-    svm_diagnostics = pd.DataFrame([
-        {
-            "model": f"PegasosSVM ({pegasos_svm.feature_map})",
-            "feature_map": pegasos_svm.feature_map,
-            "lambda": pegasos_svm.lambda_,
-            "n_iters": pegasos_svm.n_iters,
-            "gamma": pegasos_svm.gamma,
-            "n_components": pegasos_svm.n_components,
-            "weight_norm": np.linalg.norm(pegasos_svm.w),
-            "margin_width": pegasos_svm.margin_width_,
-            "support_vector_count": len(pegasos_svm.support_indices_),
-            "final_objective": pegasos_svm.objective_history_[-1],
-            "fit_seconds": t_fit_svm,
-        },
-        {
-            "model": "PegasosSVM (RFF)",
-            "feature_map": "rff",
-            "lambda": pegasos_rff.lambda_,
-            "n_iters": pegasos_rff.n_iters,
-            "gamma": pegasos_rff.gamma,
-            "n_components": pegasos_rff.n_components,
-            "weight_norm": np.linalg.norm(pegasos_rff.w),
-            "margin_width": pegasos_rff.margin_width_,
-            "support_vector_count": len(pegasos_rff.support_indices_),
-            "final_objective": pegasos_rff.objective_history_[-1],
-            "fit_seconds": t_fit_rff,
-        },
-    ])
-
-    svm_diagnostics.to_csv(
-        REPORT_DIR / "svm_diagnostics.csv",
-        index=False,
-    )
-
-    convergence = pd.DataFrame({
-        "linear_iteration": pegasos_svm.objective_iterations_,
-        "linear_objective": pegasos_svm.objective_history_,
-        "rff_iteration": pegasos_rff.objective_iterations_,
-        "rff_objective": pegasos_rff.objective_history_,
-    })
-
-    convergence.to_csv(
-        REPORT_DIR / "svm_convergence.csv",
-        index=False,
-    )
+    selections = {"seed": args.seed, "regression": regression["selections"],
+                  "svm_linear": selected_linear, "svm_rff": selected_rff,
+                  **scratch_tree_configs,
+                  "selection_data": "training and validation only"}
+    (REPORT_DIR / "selected_configs.json").write_text(
+        json.dumps(selections, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
     print("\n" + "=" * 80)
     print("  VALIDATION SET BENCHMARK RESULTS")
@@ -624,10 +759,8 @@ def main() -> None:
     df_test.to_csv(REPORT_DIR / "test_summary.csv")
     print(
         f"  ✓ Exported results to {REPORT_DIR / 'validation_summary.csv'}, "
-        f"{REPORT_DIR / 'test_summary.csv'}, "
-        f"{REPORT_DIR / 'svm_validation_trials.csv'}, "
-        f"{REPORT_DIR / 'svm_diagnostics.csv'}, and "
-        f"{REPORT_DIR / 'svm_convergence.csv'}"
+        f"{REPORT_DIR / 'test_summary.csv'}, and "
+        f"{REPORT_DIR / 'selected_configs.json'}"
     )
     print("\n✓ Pipeline execution complete.")
 

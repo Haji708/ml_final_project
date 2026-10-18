@@ -1,0 +1,77 @@
+{
+  "seed": 42,
+  "regression": {
+    "Linear": {
+      "family": "Linear",
+      "alpha": 0.0,
+      "feature_mode": "log_size_interactions",
+      "target_mode": "price",
+      "validation_RMSE": 469459.25926248514,
+      "training_RMSE": 435877.9671766525
+    },
+    "Ridge": {
+      "family": "Ridge",
+      "alpha": 0.01,
+      "feature_mode": "log_size_interactions",
+      "target_mode": "price",
+      "validation_RMSE": 469459.45476082707,
+      "training_RMSE": 435878.0711108429
+    },
+    "Tree": {
+      "family": "Tree",
+      "max_depth": 12,
+      "min_samples_leaf": 5,
+      "feature_mode": "raw_unscaled",
+      "target_mode": "price",
+      "validation_RMSE": 359067.7445102838,
+      "training_RMSE": 231242.99449549316
+    }
+  },
+  "svm_linear": {
+    "feature_map": "linear",
+    "lambda_": 0.001,
+    "gamma": 1.0,
+    "n_components": 250,
+    "n_iters": 500000,
+    "phase": "refine",
+    "Precision": 0.8273801619970788,
+    "Recall": 0.8273801619970788,
+    "F1": 0.8273801619970788,
+    "AUC": 0.9074624445580928,
+    "updates_per_training_row": 7.092902841416878,
+    "initial_objective": 30474.969617973966,
+    "final_objective": 0.42848626358877473,
+    "fit_and_validation_seconds": 2.513002477993723
+  },
+  "svm_rff": {
+    "feature_map": "rff",
+    "lambda_": 0.0001,
+    "gamma": 0.001,
+    "n_components": 500,
+    "n_iters": 200000,
+    "phase": "refine",
+    "Precision": 0.7862941738299905,
+    "Recall": 0.8745186562209534,
+    "F1": 0.8280631168667881,
+    "AUC": 0.9057021516784529,
+    "updates_per_training_row": 2.8371611365667513,
+    "initial_objective": 14190.025071444023,
+    "final_objective": 0.48813400742136603,
+    "fit_and_validation_seconds": 1.985491017003369
+  },
+  "scratch_tree_regression": {
+    "task": "regression",
+    "criterion": "mse",
+    "max_depth": 15,
+    "min_samples_leaf": 1,
+    "random_state": 42
+  },
+  "scratch_tree_classification": {
+    "task": "classification",
+    "criterion": "entropy",
+    "max_depth": 15,
+    "min_samples_leaf": 1,
+    "random_state": 42
+  },
+  "selection_data": "training and validation only"
+}
